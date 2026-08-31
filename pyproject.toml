@@ -1,0 +1,36 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "avap"
+version = "0.1.0"
+description = "AMD Video Analytics Pipeline — DeepStream-equivalent multi-stream video analytics for AMD GPUs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# ONNX Runtime: on the AMD box install AMD's onnxruntime-rocm/migraphx wheel
+# (see docs/SETUP.md); on the 3090 parity box use onnxruntime-gpu.
+infer = ["onnxruntime"]
+dev = ["pytest>=8", "ruff"]
+
+[tool.scikit-build]
+cmake.version = ">=3.26"
+wheel.packages = ["src/avap"]
+build-dir = "build/{wheel_tag}"
+
+[tool.scikit-build.cmake.define]
+# Flip to OFF to build the decode/bridge extension before ROCm is installed
+# (VAAPI decode + dmabuf export still work; HIP import/kernels are stubbed).
+AVAP_WITH_HIP = {env="AVAP_WITH_HIP", default="ON"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

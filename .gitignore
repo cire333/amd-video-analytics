@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.onnx
+*.mp4
+*.h264
