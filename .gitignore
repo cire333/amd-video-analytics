@@ -10,3 +10,5 @@ dist/
 *.onnx
 *.mp4
 *.h264
+results/
+models/

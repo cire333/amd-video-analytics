@@ -1,0 +1,23 @@
+# nvinfer config for YOLO26-m end-to-end ONNX.
+# Matched to the AMD pipeline for parity: FP32, RGB, 1/255 scaling,
+# stretch resize (maintain-aspect-ratio=0), conf threshold 0.30, no NMS.
+[property]
+gpu-id=0
+onnx-file=/work/yolo26m.onnx
+model-engine-file=/work/yolo26m.onnx_b1_gpu0_fp32.engine
+batch-size=1
+network-mode=0
+network-type=0
+num-detected-classes=80
+model-color-format=0
+net-scale-factor=0.00392156862745098
+maintain-aspect-ratio=0
+symmetric-padding=0
+infer-dims=3;640;640
+cluster-mode=4
+parse-bbox-func-name=NvDsInferParseYolo26
+custom-lib-path=/work/libyolo26parser.so
+gie-unique-id=1
+
+[class-attrs-all]
+pre-cluster-threshold=0.30
