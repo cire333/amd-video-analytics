@@ -102,4 +102,40 @@ void nv12_dmabuf_to_rgb(const ConvertRequest& req, float* out_host) {
     hipDestroyExternalMemory(ext_mem);
 }
 
+void nv12_host_to_rgb(const ConvertRequest& req, const uint8_t* nv12,
+                      size_t nv12_size, float* out_host) {
+    if (req.planes.size() < 2)
+        throw std::runtime_error("NV12 needs 2 planes, got " +
+                                 std::to_string(req.planes.size()));
+    check(hipSetDevice(req.device_ordinal), "hipSetDevice");
+
+    uint8_t* d_nv12 = nullptr;
+    float* d_out = nullptr;
+    try {
+        check(hipMalloc(&d_nv12, nv12_size), "hipMalloc(nv12)");
+        check(hipMemcpy(d_nv12, nv12, nv12_size, hipMemcpyHostToDevice),
+              "hipMemcpy H2D");
+
+        const size_t out_bytes = 3ull * req.dst_w * req.dst_h * sizeof(float);
+        check(hipMalloc(&d_out, out_bytes), "hipMalloc(out)");
+
+        launch_nv12_to_rgb(d_nv12 + req.planes[0].first,
+                           d_nv12 + req.planes[1].first,
+                           static_cast<int>(req.planes[0].second),
+                           static_cast<int>(req.planes[1].second),
+                           req.src_x, req.src_y, req.src_w, req.src_h,
+                           d_out, req.dst_w, req.dst_h,
+                           req.full_range, req.bt709, /*stream=*/nullptr);
+        check(hipGetLastError(), "nv12_to_rgb kernel launch");
+        check(hipMemcpy(out_host, d_out, out_bytes, hipMemcpyDeviceToHost),
+              "hipMemcpy D2H");
+    } catch (...) {
+        if (d_out) hipFree(d_out);
+        if (d_nv12) hipFree(d_nv12);
+        throw;
+    }
+    hipFree(d_out);
+    hipFree(d_nv12);
+}
+
 }  // namespace avap

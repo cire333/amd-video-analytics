@@ -57,6 +57,9 @@ class RawFrame:
     color_range: ColorRange
     color_matrix: ColorMatrix
     device_ordinal: int
+    # Driver-detiled NV12 in host memory (same planes semantics) when the
+    # surface was tiled and dmabuf export wasn't usable; dmabuf_fd is -1 then.
+    host_data: bytes | None = None
 
     def close(self) -> None:
         if self.dmabuf_fd >= 0:

@@ -24,6 +24,12 @@ struct ConvertRequest {
 // Throws std::runtime_error on failure; always consumes/closes the fd.
 void nv12_dmabuf_to_rgb(const ConvertRequest& req, float* out_host);
 
+// Same conversion from host NV12 (driver-detiled fallback for tiled
+// surfaces): uploads the planes, runs the same fused kernel. req.dmabuf_fd
+// is ignored.
+void nv12_host_to_rgb(const ConvertRequest& req, const uint8_t* nv12,
+                      size_t nv12_size, float* out_host);
+
 int hip_device_count();
 
 // Kernel launcher (defined in kernels.hip).

@@ -1,5 +1,6 @@
 #include "vaapi_decoder.h"
 
+#include <cstring>
 #include <stdexcept>
 #include <unistd.h>
 
@@ -152,13 +153,23 @@ std::optional<DecodedFrame> VaapiDecoder::export_frame(AVFrame* frame) {
     }
 
     DecodedFrame out;
-    out.dmabuf_fd = desc.objects[0].fd;      // ownership -> Python
     out.drm_modifier = desc.objects[0].drm_format_modifier;
-    out.width = static_cast<int>(desc.width);
-    out.height = static_cast<int>(desc.height);
-    for (uint32_t l = 0; l < desc.num_layers; ++l)
-        for (uint32_t p = 0; p < desc.layers[l].num_planes; ++p)
-            out.planes.emplace_back(desc.layers[l].offset[p], desc.layers[l].pitch[p]);
+    if (out.drm_modifier != 0 /* DRM_FORMAT_MOD_LINEAR */) {
+        // Tiled surface (normal on RDNA: VCN needs its native tiling for
+        // reference frames, so forcing linear breaks motion compensation).
+        // Fallback: driver-side detile + copy to host. Correct but costs a
+        // GPU->host->GPU round trip; rocDecode / a detile kernel is the
+        // planned zero-copy path (architecture §5 edge case 1).
+        ::close(desc.objects[0].fd);
+        transfer_to_host(frame, out);
+    } else {
+        out.dmabuf_fd = desc.objects[0].fd;  // ownership -> Python
+        out.width = static_cast<int>(desc.width);
+        out.height = static_cast<int>(desc.height);
+        for (uint32_t l = 0; l < desc.num_layers; ++l)
+            for (uint32_t p = 0; p < desc.layers[l].num_planes; ++p)
+                out.planes.emplace_back(desc.layers[l].offset[p], desc.layers[l].pitch[p]);
+    }
 
     // Real content rect (edge case #7): decoded surface may be padded;
     // frame->width/height are the display dims.
@@ -177,6 +188,32 @@ std::optional<DecodedFrame> VaapiDecoder::export_frame(AVFrame* frame) {
         default:                  out.color_matrix = "unknown"; break;
     }
     return out;
+}
+
+void VaapiDecoder::transfer_to_host(AVFrame* frame, DecodedFrame& out) {
+    AVFrame* sw = av_frame_alloc();
+    if (!sw) fail("av_frame_alloc(sw)");
+    sw->format = AV_PIX_FMT_NV12;
+    int err = av_hwframe_transfer_data(sw, frame, 0);
+    if (err < 0) {
+        av_frame_free(&sw);
+        fail("av_hwframe_transfer_data", err);
+    }
+
+    const int w = sw->width, h = sw->height;
+    const uint32_t y_pitch = sw->linesize[0], uv_pitch = sw->linesize[1];
+    const size_t y_size = static_cast<size_t>(y_pitch) * h;
+    const size_t uv_size = static_cast<size_t>(uv_pitch) * (h / 2);
+
+    out.dmabuf_fd = -1;
+    out.drm_modifier = 0;  // host copy is linear by construction
+    out.width = w;
+    out.height = h;
+    out.planes = {{0, y_pitch}, {static_cast<uint32_t>(y_size), uv_pitch}};
+    out.host_data.resize(y_size + uv_size);
+    memcpy(out.host_data.data(), sw->data[0], y_size);
+    memcpy(out.host_data.data() + y_size, sw->data[1], uv_size);
+    av_frame_free(&sw);
 }
 
 }  // namespace avap

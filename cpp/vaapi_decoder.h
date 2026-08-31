@@ -21,9 +21,12 @@ struct DecodedFrame {
     int width = 0;            // exported surface dims (may be padded)
     int height = 0;
     int crop_x = 0, crop_y = 0, crop_w = 0, crop_h = 0;  // real content rect
-    int dmabuf_fd = -1;       // ownership passes to Python (RawFrame)
+    int dmabuf_fd = -1;       // ownership passes to Python (RawFrame); -1 => host path
     std::vector<std::pair<uint32_t, uint32_t>> planes;   // (offset, pitch), Y then UV
     uint64_t drm_modifier = 0;  // 0 == DRM_FORMAT_MOD_LINEAR
+    // Fallback when the surface is tiled: driver-detiled NV12 in host memory
+    // (av_hwframe_transfer_data). Same planes/offset/pitch semantics.
+    std::vector<uint8_t> host_data;
     bool full_range = false;
     std::string color_matrix;   // "bt601" / "bt709" / "unknown"
 };
@@ -44,6 +47,7 @@ public:
 
 private:
     std::optional<DecodedFrame> export_frame(AVFrame* frame);
+    void transfer_to_host(AVFrame* frame, DecodedFrame& out);
 
     AVFormatContext* fmt_ = nullptr;
     AVCodecContext* codec_ = nullptr;

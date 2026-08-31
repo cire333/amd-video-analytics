@@ -27,7 +27,12 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("planes", &DecodedFrame::planes)
         .def_readonly("drm_modifier", &DecodedFrame::drm_modifier)
         .def_readonly("full_range", &DecodedFrame::full_range)
-        .def_readonly("color_matrix", &DecodedFrame::color_matrix);
+        .def_readonly("color_matrix", &DecodedFrame::color_matrix)
+        .def_property_readonly("host_data", [](const DecodedFrame& f) -> py::object {
+            if (f.host_data.empty()) return py::none();
+            return py::bytes(reinterpret_cast<const char*>(f.host_data.data()),
+                             f.host_data.size());
+        });
 
     py::class_<VaapiDecoder>(m, "Decoder")
         .def(py::init<const std::string&, const std::string&>(),
@@ -76,6 +81,37 @@ PYBIND11_MODULE(_core, m) {
           },
           py::arg("fd"), py::arg("surf_w"), py::arg("surf_h"), py::arg("planes"),
           py::arg("modifier"), py::arg("src_rect"), py::arg("dst_wh"),
+          py::arg("full_range"), py::arg("bt709"), py::arg("device_ordinal"));
+
+    m.def("nv12_host_to_rgb",
+          [](py::bytes nv12, std::vector<std::pair<uint32_t, uint32_t>> planes,
+             std::tuple<int, int, int, int> src_rect, std::tuple<int, int> dst_wh,
+             bool full_range, bool bt709, int device_ordinal) -> py::array_t<float> {
+#ifdef AVAP_WITH_HIP
+              ConvertRequest req;
+              req.planes = std::move(planes);
+              std::tie(req.src_x, req.src_y, req.src_w, req.src_h) = src_rect;
+              std::tie(req.dst_w, req.dst_h) = dst_wh;
+              req.full_range = full_range;
+              req.bt709 = bt709;
+              req.device_ordinal = device_ordinal;
+
+              auto data = nv12.cast<std::string_view>();  // no copy; nv12 outlives use
+              auto out = py::array_t<float>({3, req.dst_h, req.dst_w});
+              {
+                  py::gil_scoped_release release;
+                  nv12_host_to_rgb(req,
+                                   reinterpret_cast<const uint8_t*>(data.data()),
+                                   data.size(), out.mutable_data());
+              }
+              return out;
+#else
+              throw std::runtime_error(
+                  "avap._core was built without HIP (AVAP_WITH_HIP=OFF); "
+                  "rebuild with ROCm installed");
+#endif
+          },
+          py::arg("nv12"), py::arg("planes"), py::arg("src_rect"), py::arg("dst_wh"),
           py::arg("full_range"), py::arg("bt709"), py::arg("device_ordinal"));
 
     m.def("hip_device_count", []() -> int {

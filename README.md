@@ -47,9 +47,12 @@ scripts/           setup_system.sh (sudo), verify_env.sh
 - [x] Architecture (docs/architecture.md)
 - [x] Pure-Python pipeline layer + tests
 - [x] C++ extension written (decode + bridge + kernel)
-- [ ] Environment: ROCm ≥ 6.4 install, render group (scripts/setup_system.sh)
-- [ ] Extension builds; decode-only smoke test (AVAP_WITH_HIP=OFF)
-- [ ] Bridge verified on R9700: linear vs tiled export, dmabuf import (SETUP.md risks)
+- [x] Environment: ROCm 7.2.4 installed, gfx1201 visible (scripts/setup_system.sh)
+- [x] Extension builds (VAAPI decode + HIP bridge + kernel)
+- [x] Bridge verified on R9700: dmabuf→HIP import works; decode surfaces are
+      tiled (GFX12 modifier), handled via driver-detile host fallback —
+      pixel-correct vs CPU reference (see docs/SETUP.md findings)
+- [ ] Zero-copy decode path: evaluate rocDecode vs GFX12 detile kernel
 - [ ] V1: single stream e2e with a real detector; 3090 parity comparison
 - [ ] Multi-stream + hot add/remove under load; fd-leak soak test
 - [ ] Zero-copy inference input (ORT IOBinding / DLPack), HIP-stream overlap

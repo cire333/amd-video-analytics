@@ -55,18 +55,22 @@ class HipBridge:
             src = (frame.crop.x, frame.crop.y, fw, fh)
 
         th, tw = target_hw
-        tensor = self._core.nv12_dmabuf_to_rgb(
-            frame.dmabuf_fd,
-            frame.width, frame.height,
-            [(p.offset, p.pitch) for p in frame.planes],
-            frame.drm_modifier,
-            src,                      # (x, y, w, h) within the surface
-            (tw, th),
-            frame.color_range is ColorRange.FULL,
-            frame.color_matrix is not ColorMatrix.BT601,  # default UNKNOWN -> BT.709
-            self.device_ordinal,
-        )
-        frame.dmabuf_fd = -1  # ownership transferred; extension closed it
+        planes = [(p.offset, p.pitch) for p in frame.planes]
+        full_range = frame.color_range is ColorRange.FULL
+        bt709 = frame.color_matrix is not ColorMatrix.BT601  # UNKNOWN -> BT.709
+        if frame.dmabuf_fd >= 0:
+            tensor = self._core.nv12_dmabuf_to_rgb(
+                frame.dmabuf_fd, frame.width, frame.height, planes,
+                frame.drm_modifier, src, (tw, th),
+                full_range, bt709, self.device_ordinal,
+            )
+            frame.dmabuf_fd = -1  # ownership transferred; extension closed it
+        else:
+            # tiled-surface fallback: driver-detiled NV12 arrived in host memory
+            tensor = self._core.nv12_host_to_rgb(
+                frame.host_data, planes, src, (tw, th),
+                full_range, bt709, self.device_ordinal,
+            )
 
         return ConvertedFrame(
             tensor=tensor,

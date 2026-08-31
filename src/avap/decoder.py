@@ -90,4 +90,5 @@ class DecoderWorker:
                 f.color_matrix, ColorMatrix.UNKNOWN
             ),
             device_ordinal=self.device_ordinal,
+            host_data=f.host_data,
         )

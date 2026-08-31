@@ -50,16 +50,24 @@ pytest                                   # pure-Python layer, no GPU needed
 python examples/single_stream.py video.mp4 detector.onnx   # full e2e
 ```
 
-## Known bring-up risks (verify on hardware, in this order)
+## Bring-up findings (verified on the R9700, ROCm 7.2.4, Mesa 25.2.8 — 2026-08-31)
 
-1. **Tiled export** — if `vaExportSurfaceHandle` returns a non-linear DRM
-   modifier on radeonsi, the bridge raises. Options: request linear via
-   surface attribs at decode time, or add the detile kernel (architecture
-   §5 edge case 1). Decide from what the R9700 actually exports.
-2. **`hipImportExternalMemory` on a dmabuf** — the OpaqueFd handle type is
-   expected to accept dmabuf fds on ROCm/Linux, but this is the least
-   documented link in the chain. If it rejects the fd, fallbacks:
-   `hipExtImportBuffer`-style HSA interop, or (slow but correct) vaDeriveImage
-   + host copy to keep e2e moving while we investigate.
-3. **gfx1201 in the ROCm release actually installed** — `rocminfo | grep gfx`
-   must show gfx1201; if not, pin a newer ROCm from repo.radeon.com.
+1. **Tiled export — CONFIRMED**: radeonsi exports decode surfaces with a GFX12
+   swizzle modifier (`0x0200000000082305`), not linear. `AMD_DEBUG=notiling`
+   makes export linear but **breaks VCN motion compensation** (reference
+   frames must stay natively tiled) — intra frames decode clean, P-frames
+   smear. Do not use it. Current handling: the decoder falls back to
+   `av_hwframe_transfer_data` (driver-side detile to host) for tiled
+   surfaces; the zero-copy dmabuf path activates automatically when a
+   surface is linear. Production fix candidates: **rocDecode** (AMD's
+   NVDEC-analog, packaged as `rocdecode` in the ROCm repo — owns this
+   problem internally) or a GFX12 detile kernel from addrlib.
+2. **`hipImportExternalMemory` on a dmabuf — WORKS**: OpaqueFd handle type
+   accepts VAAPI dmabuf fds on ROCm 7.2.4 / gfx1201, and
+   `hipExternalMemoryGetMappedBuffer` + kernel reads produce pixel-correct
+   output (verified against CPU-decoded reference frames).
+3. **gfx1201 — WORKS**: visible in rocminfo, kernels compile and run.
+4. **Mixed-toolchain gotcha**: pybind11's default LTO (GCC slim-LTO objects)
+   is silently discarded by the ROCm clang link step used when a `.hip`
+   file is in the target — the module loses `PyInit__core`. CMakeLists uses
+   `NO_EXTRAS` to prevent this.

@@ -29,7 +29,10 @@ if(AVAP_WITH_HIP)
     set_source_files_properties(cpp/kernels.hip PROPERTIES LANGUAGE HIP)
 endif()
 
-pybind11_add_module(_core ${AVAP_SOURCES})
+# NO_EXTRAS: pybind11's default LTO produces GCC slim-LTO objects that the
+# ROCm clang link step (used because kernels.hip is in the target) silently
+# discards, leaving a module without PyInit__core.
+pybind11_add_module(_core NO_EXTRAS ${AVAP_SOURCES})
 
 target_link_libraries(_core PRIVATE
     PkgConfig::LIBVA
