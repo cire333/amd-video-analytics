@@ -83,6 +83,7 @@ def color_for(track_id: int) -> tuple[int, int, int]:
 def main():
     video, model_path, out_dir = sys.argv[1], sys.argv[2], sys.argv[3]
     conf_thr = float(sys.argv[4]) if len(sys.argv) > 4 else 0.30
+    out_fps = float(sys.argv[5]) if len(sys.argv) > 5 else 25.0
     os.makedirs(out_dir, exist_ok=True)
 
     dev = require_decode_device(probe_devices())
@@ -159,7 +160,7 @@ def main():
                             0.5, col, 2)
             if writer is None:
                 writer = cv2.VideoWriter(f"{out_dir}/annotated_raw.mp4",
-                                         cv2.VideoWriter_fourcc(*"mp4v"), 25,
+                                         cv2.VideoWriter_fourcc(*"mp4v"), out_fps,
                                          (bgr.shape[1], bgr.shape[0]))
             writer.write(bgr)
             n_frames += 1

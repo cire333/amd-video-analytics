@@ -36,6 +36,9 @@ def load_amd(path):
 
 def load_kitti(det_dir, track_dir):
     frames, tracks = {}, {}
+    # KITTI: <label> trunc occl alpha x1 y1 x2 y2 h w l x y z ry score
+    # (track files insert the track id after the label). Labels can contain
+    # spaces ("traffic light"), so anchor on the 15 numeric tail fields.
     for fn in sorted(os.listdir(det_dir)):
         idx = int(fn.split("_")[-1].split(".")[0])
         objs = []
@@ -43,8 +46,8 @@ def load_kitti(det_dir, track_dir):
             p = line.split()
             if len(p) < 16:
                 continue
-            objs.append({"label": p[0], "conf": float(p[15]),
-                         "bbox": [float(v) for v in p[4:8]], "track_id": None})
+            objs.append({"label": " ".join(p[:-15]), "conf": float(p[-1]),
+                         "bbox": [float(v) for v in p[-12:-8]], "track_id": None})
         frames[idx] = objs
     for fn in sorted(os.listdir(track_dir)):
         idx = int(fn.split("_")[-1].split(".")[0])
@@ -53,8 +56,8 @@ def load_kitti(det_dir, track_dir):
             p = line.split()
             if len(p) < 17:
                 continue
-            objs.append({"label": p[0], "track_id": int(p[1]),
-                         "bbox": [float(v) for v in p[5:9]]})
+            objs.append({"label": " ".join(p[:-16]), "track_id": int(p[-16]),
+                         "bbox": [float(v) for v in p[-12:-8]]})
         tracks[idx] = objs
     return frames, tracks
 
