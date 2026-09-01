@@ -99,3 +99,29 @@ No throttling: the R9700 is idle most of each frame in the sequential
 runner. Pipelining decode/infer/annotate and hardware encode are the
 known optimizations; FP16 alone puts inference at 2.2x DeepStream's
 observed end-to-end rate.
+
+## Vehicle-count calibration vs hand count (2026-09-01)
+
+Ground truth: manual count of ~166 vehicles in a 6-minute span (~830
+extrapolated over the 29.8-min video). Offline sweep of tracking
+mechanisms over the saved AMD detections (scripts/tracking_sweep.py — no
+core-code changes), all configs excluding the smallest 12% of bounding
+boxes by area (cutoff: 359 px^2 ~ 18x18 at 1280x720; same absolute cutoff
+applied to DeepStream), counting vehicle classes only.
+
+Best configuration — SortTracker(iou=0.3, max_age=30, min_hits=3) with
+measurement gates conf >= 0.40, net displacement >= 100 px, track length
+>= 2 s, tracklet stitching (gap <= 6 s, endpoint distance <= 80 px):
+
+| | vehicle tracks | per-6-min windows | vs GT |
+|---|---|---|---|
+| AMD (best config) | **830** | 161 168 152 174 175 | +0 (windows vs 166 hand count) |
+| AMD (neighboring configs) | 792–875 | ±8% | robust region, not a lucky point |
+| DeepStream IOU (same gates) | 320–331 | 60–75 | **-60%: undercounts** |
+
+Confirms the operator intuition: DeepStream undercounts (~2.5x low —
+detection-limited: its preprocessing suppresses distant vehicles, so no
+measurement-side gate can recover them) while raw AMD overcounts from
+track fragmentation; duration/displacement gates plus stitching bring AMD
+to the hand-counted rate across every window. The counting recipe lives
+entirely in the measurement layer.
