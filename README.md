@@ -57,3 +57,28 @@ scripts/           setup_system.sh (sudo), verify_env.sh
 - [ ] Multi-stream + hot add/remove under load; fd-leak soak test
 - [ ] Zero-copy inference input (ORT IOBinding / DLPack), HIP-stream overlap
 - [ ] Per-GFX-gen tuning; detile kernel if linear export profiles badly
+
+## Streaming API
+
+```python
+from avap import AMDStream, AMDGPUManager
+
+stream = AMDStream(
+    data_location="rtsp://cam/live",       # local path, s3://, rtsp://, http(s)://
+    region_of_interest=(0.0, 0.3, 1.0, 0.9),  # bbox or polygon, normalized;
+                                              # fused into the GPU conversion kernel
+    model="yolo26m",                       # zoo (yolo26n/s/m/l/x) or custom .onnx
+    model_quant="fp16",                    # fp32 | fp16 | int8 (stream-calibrated)
+    tracker_type="bytetrack",              # iou | sort | bytetrack | BYO object
+    output_location="kafka://broker:9092/dets",  # kafka:// s3:// sqs:// or file
+    batch_size=1,                          # 1 = realtime; >1 = batched inference
+    output_format="json",                  # json | csv | parquet
+    output_format_template=None,           # optional per-record str.format
+    frame_sample_rate=10,                  # max fps sampled from the source
+)
+stream.start_stream()
+
+mgr = AMDGPUManager(device_id=0)
+mgr.add_stream(stream)
+mgr.start_streams()   # sequential; a failed start is logged and isolated
+```
