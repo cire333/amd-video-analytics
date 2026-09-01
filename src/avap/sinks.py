@@ -4,6 +4,8 @@ Locations (parsed from output_location):
     /path/file.jsonl            local file
     s3://bucket/prefix/file     S3 (boto3)
     kafka://host:9092/topic     Kafka (kafka-python)
+    kinesis://stream-name       Kinesis Data Streams (boto3); optional
+    kinesis://region/stream     region override before the stream name
     sqs://https%3A//... or a plain https queue URL      SQS (boto3)
 
 Formats: "json" (one object per frame-record), "csv" (one row per tracked
@@ -152,6 +154,34 @@ class KafkaSink(Sink):
         self._producer.close()
 
 
+class KinesisSink(Sink):
+    """kinesis://stream-name or kinesis://region/stream-name. Partition key
+    is the record's source_id, preserving per-camera ordering per shard."""
+
+    def __init__(self, uri: str, formatter: Formatter):
+        import boto3
+        rest = uri[len("kinesis://"):]
+        region, _, stream = rest.partition("/")
+        if not stream:  # no region segment: kinesis://stream-name
+            region, stream = None, rest
+        if not stream:
+            raise ValueError(
+                f"bad Kinesis uri (want kinesis://[region/]stream-name): {uri}")
+        self.stream = stream
+        self.formatter = formatter
+        self._kinesis = boto3.client(
+            "kinesis", **({"region_name": region} if region else {}))
+
+    def emit(self, rec):
+        key = str(rec.get("source_id", "avap"))
+        for line in self.formatter.lines(rec):
+            self._kinesis.put_record(StreamName=self.stream,
+                                     Data=line.encode(), PartitionKey=key)
+
+    def close(self):
+        pass
+
+
 class SQSSink(Sink):
     def __init__(self, uri: str, formatter: Formatter):
         import boto3
@@ -174,6 +204,8 @@ def make_sink(output_location: str, output_format: str = "json",
         return S3Sink(output_location, formatter)
     if output_location.startswith("kafka://"):
         return KafkaSink(output_location, formatter)
+    if output_location.startswith("kinesis://"):
+        return KinesisSink(output_location, formatter)
     is_sqs_https = (output_location.startswith("https://")
                     and output_location.split("/")[2].startswith("sqs."))
     if output_location.startswith("sqs://") or is_sqs_https:

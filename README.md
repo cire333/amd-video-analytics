@@ -70,7 +70,7 @@ stream = AMDStream(
     model="yolo26m",                       # zoo (yolo26n/s/m/l/x) or custom .onnx
     model_quant="fp16",                    # fp32 | fp16 | int8 (stream-calibrated)
     tracker_type="bytetrack",              # iou | sort | bytetrack | BYO object
-    output_location="kafka://broker:9092/dets",  # kafka:// s3:// sqs:// or file
+    output_location="kafka://broker:9092/dets",  # kafka:// kinesis:// s3:// sqs:// or file
     batch_size=1,                          # 1 = realtime; >1 = batched inference
     output_format="json",                  # json | csv | parquet
     output_format_template=None,           # optional per-record str.format

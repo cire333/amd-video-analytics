@@ -87,6 +87,33 @@ def test_make_sink_dispatch(tmp_path):
     s.close()
 
 
+def test_kinesis_uri_parsing(monkeypatch):
+    import avap.sinks as sinks
+    sent = []
+
+    class FakeClient:
+        def put_record(self, **kw):
+            sent.append(kw)
+
+    class FakeBoto3:
+        @staticmethod
+        def client(service, **kw):
+            assert service == "kinesis"
+            FakeBoto3.region = kw.get("region_name")
+            return FakeClient()
+
+    monkeypatch.setitem(__import__("sys").modules, "boto3", FakeBoto3)
+    s = sinks.KinesisSink("kinesis://us-west-2/detections", Formatter("json"))
+    assert s.stream == "detections" and FakeBoto3.region == "us-west-2"
+    s2 = sinks.KinesisSink("kinesis://detections", Formatter("json"))
+    assert s2.stream == "detections" and FakeBoto3.region is None
+    s2.emit(rec())
+    assert sent[0]["StreamName"] == "detections"
+    assert sent[0]["PartitionKey"] == "cam0"
+    with pytest.raises(ValueError):
+        sinks.KinesisSink("kinesis://", Formatter("json"))
+
+
 def test_parquet_local(tmp_path):
     pytest.importorskip("pyarrow")
     import pyarrow.parquet as pq
