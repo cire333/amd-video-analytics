@@ -62,3 +62,40 @@ limited-range. Supporting signal: DS reports 822 traffic lights vs AMD's
   rows. Use IoU matching otherwise.
 - KITTI labels can contain spaces ("traffic light"); parse from the
   numeric tail (compare_detections.py fixed).
+
+## Kalman tracker rerun (2026-09-01)
+
+Same detections, tracker swapped: greedy-IoU placeholder -> SORT-style
+Kalman (constant-velocity, Hungarian assignment, min_hits=3, max_age=15,
+class-agnostic association with majority-vote labels).
+
+| | AMD greedy-IoU | AMD Kalman/SORT | DeepStream IOU |
+|---|---|---|---|
+| unique tracks | 4906 | 2799 | 348 |
+| mean length (frames) | 34.2 | 57.3 | 584.8 |
+| tracks >= 5s | — | 608 | 296 |
+| tracks with avg area < 32x32 px | — | 786 | 26 |
+
+Reading: the tracker itself is no longer the dominant fragmentation
+source — detection flicker is. 786 of AMD's tracks are tiny distant
+objects (< 32x32 px) that DeepStream's preprocessing largely suppresses
+(26 such tracks); on substantial tracks (>= 5 s) the gap is 608 vs 296,
+i.e. ~2x, driven by AMD's 19,789 extra borderline detections appearing
+and disappearing around the 0.30 threshold. Levers to converge further:
+raise max_age (1 s -> 2-3 s), add a track-level confidence gate, or a
+min-area gate matching the deployment's object sizes.
+
+## Performance decomposition (answering "34 fps seems low")
+
+| measurement | fps |
+|---|---|
+| DeepStream end-to-end (3090, pipelined C, NVENC/OSD) | 172 |
+| AMD full runner (single Python thread incl. cv2 draw + SW encode) | 34 |
+| AMD inference only, MIGraphX FP32 | 139 |
+| AMD inference only, MIGraphX FP16 | 381 |
+| AMD decode only (incl. host-detile fallback) | 366 |
+
+No throttling: the R9700 is idle most of each frame in the sequential
+runner. Pipelining decode/infer/annotate and hardware encode are the
+known optimizations; FP16 alone puts inference at 2.2x DeepStream's
+observed end-to-end rate.
