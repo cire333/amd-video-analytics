@@ -22,7 +22,7 @@ import numpy as np
 from avap import _core
 from avap.capabilities import probe_devices, require_decode_device
 from avap.frame import ObjectMeta
-from avap.tracker import IouTracker
+from avap.kalman_tracker import SortTracker
 
 INPUT_SIZE = 640
 
@@ -89,7 +89,7 @@ def main():
     dev = require_decode_device(probe_devices())
     print(f"device: {dev.drm_render_node} {dev.gcn_arch}")
     model = MigraphxYolo(model_path)
-    tracker = IouTracker(iou_threshold=0.3, max_age=10)
+    tracker = SortTracker(iou_threshold=0.3, max_age=15, min_hits=3)
 
     dec = _core.Decoder(video, dev.drm_render_node)
     writer = None

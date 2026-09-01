@@ -8,6 +8,7 @@ from .capabilities import DeviceCapabilities, probe_devices
 from .frame import (BatchMeta, ColorMatrix, ColorRange, CropRect, FrameMeta,
                     ObjectMeta, PlaneLayout, RawFrame)
 from .graph import GraphExecutor, ModelGraph, OnnxModel
+from .kalman_tracker import SortTracker
 from .pipeline import Pipeline
 from .registry import StreamRegistry
 from .roi import RoiConfig, RoiTransform
@@ -19,5 +20,6 @@ __all__ = [
     "BatchMeta", "ColorMatrix", "ColorRange", "CropRect", "DeviceCapabilities",
     "DynamicBatcher", "FrameMeta", "GraphExecutor", "IouTracker", "ModelGraph",
     "ObjectMeta", "OnnxModel", "Pipeline", "PlaneLayout", "RawFrame",
-    "RoiConfig", "RoiTransform", "StreamRegistry", "TrackerBank", "probe_devices",
+    "RoiConfig", "RoiTransform", "SortTracker", "StreamRegistry", "TrackerBank",
+    "probe_devices",
 ]
