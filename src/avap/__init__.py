@@ -10,6 +10,7 @@ from .frame import (BatchMeta, ColorMatrix, ColorRange, CropRect, FrameMeta,
 from .bytetrack import ByteTracker
 from .graph import GraphExecutor, ModelGraph, OnnxModel
 from .kalman_tracker import SortTracker
+from .ocsort import OcSortTracker
 from .streaming import AMDGPUManager, AMDStream
 from .pipeline import Pipeline
 from .registry import StreamRegistry
@@ -22,7 +23,7 @@ __all__ = [
     "AMDGPUManager", "AMDStream", "ByteTracker",
     "BatchMeta", "ColorMatrix", "ColorRange", "CropRect", "DeviceCapabilities",
     "DynamicBatcher", "FrameMeta", "GraphExecutor", "IouTracker", "ModelGraph",
-    "ObjectMeta", "OnnxModel", "Pipeline", "PlaneLayout", "RawFrame",
+    "ObjectMeta", "OcSortTracker", "OnnxModel", "Pipeline", "PlaneLayout", "RawFrame",
     "RoiConfig", "RoiTransform", "SortTracker", "StreamRegistry", "TrackerBank",
     "probe_devices",
 ]

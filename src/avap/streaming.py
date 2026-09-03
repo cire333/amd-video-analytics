@@ -39,6 +39,7 @@ from .capabilities import DeviceCapabilities, probe_devices
 from .frame import ObjectMeta
 from .bytetrack import ByteTracker
 from .kalman_tracker import SortTracker
+from .ocsort import OcSortTracker
 from .model_zoo import QUANT_MODES, MigraphxModel, resolve_model
 from .roi import RoiConfig
 from .sinks import Sink, frame_record, make_sink
@@ -50,6 +51,7 @@ TRACKERS: dict[str, Callable[[], TrackerProtocol]] = {
     "iou": IouTracker,
     "sort": SortTracker,
     "bytetrack": ByteTracker,
+    "ocsort": OcSortTracker,
 }
 
 COCO = None  # filled lazily from model zoo label list
