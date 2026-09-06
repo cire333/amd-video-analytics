@@ -47,6 +47,8 @@ PYBIND11_MODULE(_core, m) {
                  if (!f) return py::none();
                  return py::cast(*f);
              })
+        .def("abort", &VaapiDecoder::abort,
+             "Thread-safe: unblocks a next_frame() stuck in network I/O")
         .def("close", &VaapiDecoder::close);
 
     m.def("nv12_dmabuf_to_rgb",

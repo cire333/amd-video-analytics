@@ -82,3 +82,29 @@ mgr = AMDGPUManager(device_id=0)
 mgr.add_stream(stream)
 mgr.start_streams()   # sequential; a failed start is logged and isolated
 ```
+
+### Retry & error reporting
+
+```python
+from avap import AMDStream, AMDGPUManager, RetryPolicy
+
+def report(event):     # -> your logger / metrics / alerting
+    print(event.type, event.source_id, event.attempt, event.error)
+
+stream = AMDStream(
+    "rtsp://cam/live", ...,
+    retry_policy=RetryPolicy(max_retries=10,       # None = retry forever
+                             initial_backoff_s=1, max_backoff_s=60,
+                             backoff_multiplier=2, reset_after_s=30),
+    on_event=report,   # connecting/connected/disconnected/reconnecting/
+)                      # gave_up/eof/sink_error
+
+mgr = AMDGPUManager(config={"on_event": report,          # fleet-wide defaults
+                            "retry_policy": RetryPolicy(max_retries=None)})
+```
+
+Live sources enter the retry cycle even if down at startup; files fail
+fast. Network I/O is deadline-bounded in the decoder (15 s connect, 30 s
+read stall), `stop_stream()` aborts a blocked read immediately, sink
+failures drop the record and emit `sink_error` instead of stalling decode,
+and `mgr.status()` reports restarts / sink_errors / last_error per stream.

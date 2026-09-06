@@ -11,6 +11,7 @@ extern "C" {
 #include <libavutil/hwcontext_vaapi.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/time.h>
 }
 
 namespace avap {
@@ -39,6 +40,19 @@ VADisplay va_display_of(AVBufferRef* hw_device) {
 
 }  // namespace
 
+int VaapiDecoder::interrupt_cb(void* opaque) {
+    auto* self = static_cast<VaapiDecoder*>(opaque);
+    if (self->abort_.load(std::memory_order_relaxed)) return 1;
+    return av_gettime() > self->deadline_us_.load(std::memory_order_relaxed);
+}
+
+void VaapiDecoder::arm_deadline(double seconds) {
+    deadline_us_.store(av_gettime() + static_cast<int64_t>(seconds * 1e6),
+                       std::memory_order_relaxed);
+}
+
+void VaapiDecoder::abort() { abort_.store(true, std::memory_order_relaxed); }
+
 VaapiDecoder::VaapiDecoder(const std::string& uri, const std::string& render_node) {
     int err = av_hwdevice_ctx_create(&hw_device_, AV_HWDEVICE_TYPE_VAAPI,
                                      render_node.c_str(), nullptr, 0);
@@ -47,11 +61,17 @@ VaapiDecoder::VaapiDecoder(const std::string& uri, const std::string& render_nod
     AVDictionary* opts = nullptr;
     if (uri.rfind("rtsp://", 0) == 0) {
         av_dict_set(&opts, "rtsp_transport", "tcp", 0);
-        av_dict_set(&opts, "stimeout", "5000000", 0);  // 5s socket timeout, us
     }
+    // interrupt callback bounds ALL blocking network I/O (connect included) —
+    // rtsp option timeouts (the old "stimeout") are gone in FFmpeg >= 5
+    fmt_ = avformat_alloc_context();
+    if (!fmt_) fail("avformat_alloc_context");
+    fmt_->interrupt_callback = {interrupt_cb, this};
+    arm_deadline(kConnectTimeoutS);
     err = avformat_open_input(&fmt_, uri.c_str(), nullptr, &opts);
     av_dict_free(&opts);
-    if (err < 0) fail("avformat_open_input(" + uri + ")", err);
+    if (err < 0) fail("avformat_open_input(" + uri + ")", err);  // fmt_ freed by FFmpeg
+    arm_deadline(kConnectTimeoutS);  // stream probing is network I/O too
     if ((err = avformat_find_stream_info(fmt_, nullptr)) < 0)
         fail("avformat_find_stream_info", err);
 
@@ -97,6 +117,7 @@ std::optional<DecodedFrame> VaapiDecoder::next_frame() {
 
             // feed the next video packet
             while (true) {
+                arm_deadline(kReadTimeoutS);   // per-read stall bound
                 err = av_read_frame(fmt_, pkt);
                 if (err == AVERROR_EOF) {
                     avcodec_send_packet(codec_, nullptr);  // enter drain mode
