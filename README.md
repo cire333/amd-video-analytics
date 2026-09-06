@@ -108,3 +108,13 @@ fast. Network I/O is deadline-bounded in the decoder (15 s connect, 30 s
 read stall), `stop_stream()` aborts a blocked read immediately, sink
 failures drop the record and emit `sink_error` instead of stalling decode,
 and `mgr.status()` reports restarts / sink_errors / last_error per stream.
+
+## Advanced API
+
+`avap.advanced` — the integrated pipeline layer reverse-engineered from the
+DeepStream ingestion system: PGIE/SGIE-style secondary inference on object
+crops (child detections, classifiers, embedding stages), hierarchical
+object metadata, named probe points, the LPR cascade (plate detect -> OCR
+-> DINOv2 re-ID with plate voting and persistent vehicle re-identification),
+wire-compatible DataRecord publishing with per-source batching, and
+per-source FPS metrics. See [docs/advanced_api.md](docs/advanced_api.md).
