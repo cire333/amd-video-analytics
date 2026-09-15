@@ -82,3 +82,23 @@ mgr = AMDGPUManager(device_id=0)
 mgr.add_stream(stream)
 mgr.start_streams()   # sequential; a failed start is logged and isolated
 ```
+
+## Model daisy-chaining (device-resident)
+
+`ModelChain` runs N models back-to-back with the frame staying in GPU
+memory between hops (the DeepStream/NVMM analog): one upload, N inferences
+against pre-allocated device buffers, one download. Adjacent shapes are
+validated at build time. Measured on the R9700 (fp16): a 5-model chain at
+640x640 drops 6.7 -> 2.2 ms/frame; a 4-model chain at 1280x1280 drops
+32.8 -> 9.8 ms/frame (70% less latency). Reproduce with
+`scripts/bench_chain.py`.
+
+```python
+from avap import ModelChain
+chain = ModelChain(["enhance.onnx", "denoise.onnx", "detector.onnx"],
+                   quant="fp16")
+out = chain(frame_chw[None])
+
+# or directly in the light API — a list of models becomes a chain:
+AMDStream(..., model=["enhance.onnx", "yolo26m"], model_quant="fp16")
+```

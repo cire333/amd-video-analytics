@@ -164,9 +164,17 @@ class AMDStream:
                     raise RuntimeError("no AMD device with a decode engine found")
                 self.device = amd[0]
             self._uri = resolve_data_location(self.data_location)
-            onnx = resolve_model(self.model_name, self.batch_size, self.imgsz)
-            self._model = MigraphxModel(onnx, self.model_quant,
-                                        self.device.device_ordinal)
+            if isinstance(self.model_name, (list, tuple)):
+                # daisy-chained models: frame handoff stays on the GPU
+                from .chain import ModelChain
+                self._model = ModelChain(list(self.model_name),
+                                         self.model_quant,
+                                         self.device.device_ordinal,
+                                         self.batch_size)
+            else:
+                onnx = resolve_model(self.model_name, self.batch_size, self.imgsz)
+                self._model = MigraphxModel(onnx, self.model_quant,
+                                            self.device.device_ordinal)
             self._sink = make_sink(self.output_location, self.output_format,
                                    self.output_format_template)
             # fail fast on an unopenable source before declaring running
