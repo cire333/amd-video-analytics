@@ -22,7 +22,7 @@ class FakePrimary:
     def prepare(self):
         self.prepared = True
 
-    def run(self, rgb, frame):
+    def run(self, rgb, frame, dev=None):
         h, w = rgb.shape[:2]
         frame.objects.append(AdvObjectMeta(
             object_id=None, component_id=self.config.component_id,
@@ -39,7 +39,7 @@ class FakePlateDetect:
     def prepare(self):
         pass
 
-    def run(self, rgb, frame):
+    def run(self, rgb, frame, dev=None):
         for parent in [o for o in frame.objects if o.component_id == 1]:
             child = AdvObjectMeta(object_id=None, component_id=2, class_id=0,
                                   label="plate", confidence=0.9,
@@ -59,7 +59,7 @@ class FakeOcr:
     def prepare(self):
         pass
 
-    def run(self, rgb, frame):
+    def run(self, rgb, frame, dev=None):
         for obj in [o for o in frame.objects if o.component_id == 2]:
             obj.classifications.append(
                 Classification(component_id=3, label="GMX999", confidence=0.9))
@@ -76,7 +76,7 @@ class FakeEmbed:
     def prepare(self):
         pass
 
-    def run(self, rgb, frame):
+    def run(self, rgb, frame, dev=None):
         for obj in [o for o in frame.objects if o.component_id == 1]:
             obj.tensors[4] = self._vec
 
@@ -102,6 +102,7 @@ def make_pipeline(tmp_path, **kw):
         tracker="sort",
         lpr=LPRStage(LPRConfig(min_plate_reads=2)),
         publisher=pub,
+        device_resident=False,  # stub stages, no GPU in unit tests
         **kw)
     return pipe, sent
 

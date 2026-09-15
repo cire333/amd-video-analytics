@@ -77,7 +77,8 @@ class AdvancedPipeline:
                  class_mapper: ClassMapper | None = None,
                  publisher: DataPublisher | None = None,
                  include_embedding: bool = False,
-                 device_ordinal: int | None = None):
+                 device_ordinal: int | None = None,
+                 device_resident: bool = True):
         self.primary = primary
         self.stages = list(stages or [])
         names = [self._stage_name(s) for s in self.stages]
@@ -89,6 +90,7 @@ class AdvancedPipeline:
         self.class_mapper = class_mapper or ClassMapper()
         self.publisher = publisher
         self.include_embedding = include_embedding
+        self.device_resident = device_resident
         self.perf = PerfData()
 
         self._probes: dict[str, list[Probe]] = {}
@@ -160,8 +162,15 @@ class AdvancedPipeline:
         else:
             self._device = next(d for d in probe_devices()
                                 if d.device_ordinal == self._device_ordinal)
+        if self.device_resident:
+            from .device import device_api_available
+            if not device_api_available():
+                log.warning("device-resident crop API not in this _core build; "
+                            "falling back to host crops")
+                self.device_resident = False
         for stage in [self.primary, *self.stages]:
             stage.device_ordinal = self._device_ordinal
+            stage.device_resident = self.device_resident
             stage.prepare()
         if self.publisher is not None:
             self.publisher.enable()
@@ -210,8 +219,20 @@ class AdvancedPipeline:
                 if f is None:
                     log.info("[%s] EOS", ctx.camera_id)
                     return
-                rgb = self._frame_to_rgb(f)
-                self.process_image(index, rgb, f.pts_us)
+                if self.device_resident:
+                    # decode -> device RGB, never leaving the GPU; the one
+                    # host copy serves probes/annotation
+                    from .device import DeviceFrame
+                    with self._infer_lock:
+                        dev = DeviceFrame.from_decoded(f, self._device_ordinal)
+                    try:
+                        rgb = dev.to_host()
+                        self.process_image(index, rgb, f.pts_us, dev=dev)
+                    finally:
+                        dev.close()
+                else:
+                    rgb = self._frame_to_rgb(f)
+                    self.process_image(index, rgb, f.pts_us)
         except Exception:
             log.exception("[%s] source failed; other sources continue",
                           ctx.camera_id)
@@ -232,10 +253,12 @@ class AdvancedPipeline:
                    else _core.nv12_host_to_rgb(f.host_data, *args))
         return (np.clip(chw, 0.0, 1.0) * 255).astype(np.uint8).transpose(1, 2, 0)
 
-    def process_image(self, index: int, rgb: np.ndarray, pts_us: int = 0) -> AdvFrameMeta:
+    def process_image(self, index: int, rgb: np.ndarray, pts_us: int = 0,
+                      dev=None) -> AdvFrameMeta:
         """Run the full stage graph over one RGB frame (HWC uint8) for the
-        given source. Used by the decode workers and directly for
-        image-directory workloads."""
+        given source. Used by the decode workers (which also pass the
+        device-resident frame) and directly for image-directory workloads
+        (the frame is uploaded once when device residency is on)."""
         ctx = self._sources[index]
         frame_no = self._frame_no[index]
         self._frame_no[index] = frame_no + 1
@@ -243,17 +266,27 @@ class AdvancedPipeline:
                              pts_us=pts_us, frame_width=rgb.shape[1],
                              frame_height=rgb.shape[0])
 
-        with self._infer_lock:
-            self.primary.run(rgb, frame)
-        self._fire_probes("primary", frame, rgb)
-
-        self._trackers[index].update(frame.primary_objects())
-        self._fire_probes("tracker", frame, rgb)
-
-        for stage in self.stages:
+        own_dev = None
+        if dev is None and self.device_resident:
+            from .device import DeviceFrame
             with self._infer_lock:
-                stage.run(rgb, frame)
-            self._fire_probes(self._stage_name(stage), frame, rgb)
+                own_dev = DeviceFrame.from_host(rgb, self._device_ordinal)
+            dev = own_dev
+        try:
+            with self._infer_lock:
+                self.primary.run(rgb, frame, dev=dev)
+            self._fire_probes("primary", frame, rgb)
+
+            self._trackers[index].update(frame.primary_objects())
+            self._fire_probes("tracker", frame, rgb)
+
+            for stage in self.stages:
+                with self._infer_lock:
+                    stage.run(rgb, frame, dev=dev)
+                self._fire_probes(self._stage_name(stage), frame, rgb)
+        finally:
+            if own_dev is not None:
+                own_dev.close()
 
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         if self.lpr is not None:

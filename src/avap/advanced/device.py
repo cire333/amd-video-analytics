@@ -127,6 +127,16 @@ class DeviceModel:
         _core.rgb_crop_resize_device(frame.handle, frame.width, frame.height,
                                      crop, self._in_ptr, w, h,
                                      self.device_ordinal)
-        self._prog.run(self._args)
-        outs = [np.array(self._mgx.from_gpu(a)) for a in self._out_args]
+        res = self._prog.run(self._args)
+        if self._out_args:
+            outs = [np.array(self._mgx.from_gpu(a)) for a in self._out_args]
+        else:
+            # fully const-folded program: no output parameters exist; run()
+            # returns the outputs itself (device or host arguments)
+            outs = []
+            for a in res:
+                try:
+                    outs.append(np.array(self._mgx.from_gpu(a)))
+                except Exception:
+                    outs.append(np.array(a))
         return outs[0] if len(outs) == 1 else outs

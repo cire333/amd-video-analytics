@@ -81,6 +81,21 @@ upstream): `vehicle_id` (stable across track breaks via embedding re-ID),
 - Stage inference is serialized on one GPU context (a lock), not batched
   across sources like nvstreammux; throughput work is tracked separately.
 
+## Device-resident SGIE crops (default on)
+
+The cascade runs like DeepStream's NVMM path: decode produces a
+device-resident RGB frame (no host copy of pixels for inference), a HIP
+crop+resize kernel fills each secondary model's pre-allocated device input
+buffer directly, and only model outputs (KBs) cross PCIe. One host copy
+per frame remains for probes/annotation. Measured on the R9700 (fp16,
+224-input SGIEs): 8 objects x 3 stages at 720p 6.5 -> 2.9 ms/frame;
+20 objects x 3 stages at 1080p 16.6 -> 7.4 ms/frame (-55%). Toggle with
+`AdvancedPipeline(device_resident=False)`; the pipeline falls back to host
+crops automatically on builds without the device API. Reproduce with
+`scripts/bench_sgie.py`. Equivalence vs the host path is tested
+(identical OCR reads; embedding cosine > 0.999 — bilinear resize
+implementations differ at edge pixels).
+
 Tested: 24 unit tests (metadata hierarchy, voting, re-ID persistence &
 cross-track re-identification, record wire-format byte-compat, stage
 targeting, publisher batching/lossiness, probes, index recycling, bbox
