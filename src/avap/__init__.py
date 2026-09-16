@@ -12,6 +12,7 @@ from .graph import GraphExecutor, ModelGraph, OnnxModel
 from .kalman_tracker import SortTracker
 from .ocsort import OcSortTracker
 from .streaming import AMDGPUManager, AMDStream
+from .streammux import MuxBatch, MuxConfig, MuxEvent, MuxFrameMeta, SourceConfig, StreamMux, StreamMuxRunner
 from .pipeline import Pipeline
 from .registry import StreamRegistry
 from .roi import RoiConfig, RoiTransform
@@ -25,5 +26,6 @@ __all__ = [
     "DynamicBatcher", "FrameMeta", "GraphExecutor", "IouTracker", "ModelGraph",
     "ObjectMeta", "OcSortTracker", "OnnxModel", "Pipeline", "PlaneLayout", "RawFrame",
     "RoiConfig", "RoiTransform", "SortTracker", "StreamRegistry", "TrackerBank",
-    "probe_devices",
+    "MuxBatch", "MuxConfig", "MuxEvent", "MuxFrameMeta", "SourceConfig", "StreamMux",
+    "StreamMuxRunner", "probe_devices",
 ]

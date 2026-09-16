@@ -114,6 +114,93 @@ PYBIND11_MODULE(_core, m) {
           py::arg("nv12"), py::arg("planes"), py::arg("src_rect"), py::arg("dst_wh"),
           py::arg("full_range"), py::arg("bt709"), py::arg("device_ordinal"));
 
+    // --- nvstreammux canvas: batched device tensor + fused NV12->RGB->letterbox slot
+    m.def("device_alloc", [](size_t n_bytes, int device_ordinal) -> uintptr_t {
+#ifdef AVAP_WITH_HIP
+        return device_alloc(n_bytes, device_ordinal);
+#else
+        throw std::runtime_error("avap._core built without HIP");
+#endif
+    }, py::arg("n_bytes"), py::arg("device_ordinal"));
+    m.def("device_free", [](uintptr_t ptr) {
+#ifdef AVAP_WITH_HIP
+        device_free(ptr);
+#endif
+    });
+    m.def("device_memset", [](uintptr_t ptr, size_t n_bytes, int value) {
+#ifdef AVAP_WITH_HIP
+        device_memset(ptr, n_bytes, value);
+#endif
+    });
+    m.def("device_to_host_f32",
+          [](uintptr_t ptr, std::vector<ssize_t> shape) -> py::array_t<float> {
+#ifdef AVAP_WITH_HIP
+              auto out = py::array_t<float>(shape);
+              {
+                  py::gil_scoped_release release;
+                  device_to_host(ptr, static_cast<size_t>(out.nbytes()), out.mutable_data());
+              }
+              return out;
+#else
+              throw std::runtime_error("avap._core built without HIP");
+#endif
+          }, py::arg("ptr"), py::arg("shape"));
+
+    m.def("nv12_dmabuf_to_canvas",
+          [](int fd, int surf_w, int surf_h,
+             std::vector<std::pair<uint32_t, uint32_t>> planes, uint64_t modifier,
+             std::tuple<int, int, int, int> src_rect, bool full_range, bool bt709,
+             int device_ordinal, uintptr_t d_slot, std::tuple<int, int> canvas_wh,
+             std::tuple<int, int, int, int> dst_rect, bool nearest) {
+#ifdef AVAP_WITH_HIP
+              ConvertRequest req;
+              req.dmabuf_fd = fd; req.surf_width = surf_w; req.surf_height = surf_h;
+              req.planes = std::move(planes); req.drm_modifier = modifier;
+              std::tie(req.src_x, req.src_y, req.src_w, req.src_h) = src_rect;
+              req.full_range = full_range; req.bt709 = bt709;
+              req.device_ordinal = device_ordinal;
+              CanvasPlacement pl;
+              std::tie(pl.canvas_w, pl.canvas_h) = canvas_wh;
+              std::tie(pl.dst_x, pl.dst_y, pl.dst_w, pl.dst_h) = dst_rect;
+              pl.nearest = nearest;
+              py::gil_scoped_release release;
+              nv12_dmabuf_to_canvas(req, pl, d_slot);
+#else
+              throw std::runtime_error("avap._core built without HIP");
+#endif
+          },
+          py::arg("fd"), py::arg("surf_w"), py::arg("surf_h"), py::arg("planes"),
+          py::arg("modifier"), py::arg("src_rect"), py::arg("full_range"), py::arg("bt709"),
+          py::arg("device_ordinal"), py::arg("d_slot"), py::arg("canvas_wh"),
+          py::arg("dst_rect"), py::arg("nearest") = false);
+
+    m.def("nv12_host_to_canvas",
+          [](py::bytes nv12, std::vector<std::pair<uint32_t, uint32_t>> planes,
+             std::tuple<int, int, int, int> src_rect, bool full_range, bool bt709,
+             int device_ordinal, uintptr_t d_slot, std::tuple<int, int> canvas_wh,
+             std::tuple<int, int, int, int> dst_rect, bool nearest) {
+#ifdef AVAP_WITH_HIP
+              ConvertRequest req;
+              req.planes = std::move(planes);
+              std::tie(req.src_x, req.src_y, req.src_w, req.src_h) = src_rect;
+              req.full_range = full_range; req.bt709 = bt709;
+              req.device_ordinal = device_ordinal;
+              CanvasPlacement pl;
+              std::tie(pl.canvas_w, pl.canvas_h) = canvas_wh;
+              std::tie(pl.dst_x, pl.dst_y, pl.dst_w, pl.dst_h) = dst_rect;
+              pl.nearest = nearest;
+              auto data = nv12.cast<std::string_view>();
+              py::gil_scoped_release release;
+              nv12_host_to_canvas(req, pl, reinterpret_cast<const uint8_t*>(data.data()),
+                                  data.size(), d_slot);
+#else
+              throw std::runtime_error("avap._core built without HIP");
+#endif
+          },
+          py::arg("nv12"), py::arg("planes"), py::arg("src_rect"), py::arg("full_range"),
+          py::arg("bt709"), py::arg("device_ordinal"), py::arg("d_slot"), py::arg("canvas_wh"),
+          py::arg("dst_rect"), py::arg("nearest") = false);
+
     m.def("hip_device_count", []() -> int {
 #ifdef AVAP_WITH_HIP
         return hip_device_count();

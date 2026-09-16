@@ -25,6 +25,74 @@ __device__ __forceinline__ float sample_plane(const uint8_t* p, int pitch,
     return (v00 * (1 - fx) + v01 * fx) * (1 - fy) + (v10 * (1 - fx) + v11 * fx) * fy;
 }
 
+__device__ __forceinline__ void yuv_to_rgb(float y_raw, float u_raw, float v_raw,
+                                           bool full_range, bool bt709,
+                                           float& r, float& g, float& b) {
+    // range normalization (edge case #6): limited 16-235 vs full 0-255
+    const float Y = full_range ? y_raw / 255.0f : (y_raw - 16.0f) / 219.0f;
+    const float U = full_range ? (u_raw - 128.0f) / 255.0f : (u_raw - 128.0f) / 224.0f;
+    const float V = full_range ? (v_raw - 128.0f) / 255.0f : (v_raw - 128.0f) / 224.0f;
+    if (bt709) {
+        r = Y + 1.5748f * V;
+        g = Y - 0.1873f * U - 0.4681f * V;
+        b = Y + 1.8556f * U;
+    } else {  // BT.601
+        r = Y + 1.4020f * V;
+        g = Y - 0.3441f * U - 0.7141f * V;
+        b = Y + 1.7720f * U;
+    }
+    r = fminf(fmaxf(r, 0.0f), 1.0f);
+    g = fminf(fmaxf(g, 0.0f), 1.0f);
+    b = fminf(fmaxf(b, 0.0f), 1.0f);
+}
+
+// nvstreammux canvas analog (docs/nvstreammux_reverse_engineering.md §2):
+// the whole canvas_w x canvas_h slot is written — the source crop is scaled
+// into [dst_x, dst_x+dst_w) x [dst_y, dst_y+dst_h) and everything else is
+// black (letterbox fill). Bilinear (half-pixel centres) or nearest.
+__global__ void nv12_to_rgb_canvas_kernel(const uint8_t* __restrict__ y_plane,
+                                          const uint8_t* __restrict__ uv_plane,
+                                          int y_pitch, int uv_pitch,
+                                          int src_x, int src_y, int src_w, int src_h,
+                                          float* __restrict__ out,
+                                          int canvas_w, int canvas_h,
+                                          int dst_x, int dst_y, int dst_w, int dst_h,
+                                          bool full_range, bool bt709, bool nearest) {
+    const int cx_ = blockIdx.x * blockDim.x + threadIdx.x;
+    const int cy_ = blockIdx.y * blockDim.y + threadIdx.y;
+    if (cx_ >= canvas_w || cy_ >= canvas_h) return;
+    const int plane_sz = canvas_w * canvas_h;
+    const int idx = cy_ * canvas_w + cx_;
+    const int ox = cx_ - dst_x, oy = cy_ - dst_y;
+    if (ox < 0 || oy < 0 || ox >= dst_w || oy >= dst_h) {
+        out[idx] = 0.0f; out[plane_sz + idx] = 0.0f; out[2 * plane_sz + idx] = 0.0f;
+        return;
+    }
+    float y_raw, u_raw, v_raw;
+    if (nearest) {
+        const int sx = src_x + min(static_cast<int>((ox + 0.5f) * src_w / dst_w), src_w - 1);
+        const int sy = src_y + min(static_cast<int>((oy + 0.5f) * src_h / dst_h), src_h - 1);
+        y_raw = y_plane[sy * y_pitch + sx];
+        const int cx = sx >> 1, cy = sy >> 1;
+        u_raw = uv_plane[cy * uv_pitch + cx * 2];
+        v_raw = uv_plane[cy * uv_pitch + cx * 2 + 1];
+    } else {
+        const float sx = src_x + (ox + 0.5f) * src_w / dst_w - 0.5f;
+        const float sy = src_y + (oy + 0.5f) * src_h / dst_h - 0.5f;
+        y_raw = sample_plane(y_plane, y_pitch, sx, sy,
+                             src_x + src_w - 1, src_y + src_h - 1, 1);
+        const float cx = sx * 0.5f, cy = sy * 0.5f;
+        const int cmax_x = (src_x + src_w) / 2 - 1, cmax_y = (src_y + src_h) / 2 - 1;
+        u_raw = sample_plane(uv_plane, uv_pitch, cx, cy, cmax_x, cmax_y, 2);
+        v_raw = sample_plane(uv_plane + 1, uv_pitch, cx, cy, cmax_x, cmax_y, 2);
+    }
+    float r, g, b;
+    yuv_to_rgb(y_raw, u_raw, v_raw, full_range, bt709, r, g, b);
+    out[idx] = r;
+    out[plane_sz + idx] = g;
+    out[2 * plane_sz + idx] = b;
+}
+
 __global__ void nv12_to_rgb_kernel(const uint8_t* __restrict__ y_plane,
                                    const uint8_t* __restrict__ uv_plane,
                                    int y_pitch, int uv_pitch,
@@ -71,6 +139,22 @@ __global__ void nv12_to_rgb_kernel(const uint8_t* __restrict__ y_plane,
 }
 
 }  // namespace
+
+void launch_nv12_to_rgb_canvas(const uint8_t* y_plane, const uint8_t* uv_plane,
+                               int y_pitch, int uv_pitch,
+                               int src_x, int src_y, int src_w, int src_h,
+                               float* out, int canvas_w, int canvas_h,
+                               int dst_x, int dst_y, int dst_w, int dst_h,
+                               bool full_range, bool bt709, bool nearest, void* stream) {
+    const dim3 block(16, 16);
+    const dim3 grid((canvas_w + block.x - 1) / block.x, (canvas_h + block.y - 1) / block.y);
+    hipLaunchKernelGGL(nv12_to_rgb_canvas_kernel, grid, block, 0,
+                       static_cast<hipStream_t>(stream),
+                       y_plane, uv_plane, y_pitch, uv_pitch,
+                       src_x, src_y, src_w, src_h,
+                       out, canvas_w, canvas_h, dst_x, dst_y, dst_w, dst_h,
+                       full_range, bt709, nearest);
+}
 
 void launch_nv12_to_rgb(const uint8_t* y_plane, const uint8_t* uv_plane,
                         int y_pitch, int uv_pitch,
