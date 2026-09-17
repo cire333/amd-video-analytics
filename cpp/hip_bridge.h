@@ -44,6 +44,7 @@ uintptr_t device_alloc(size_t n_bytes, int device_ordinal);
 void device_free(uintptr_t ptr);
 void device_memset(uintptr_t ptr, size_t n_bytes, int value);
 void device_to_host(uintptr_t ptr, size_t n_bytes, void* out_host);
+void device_upload(uintptr_t ptr, const void* host, size_t n_bytes);
 
 // Fused NV12 -> RGB -> letterbox into a device slot. Consumes req.dmabuf_fd.
 // Synchronizes before returning so the slot is readable/usable by ORT/MIGraphX.

@@ -22,6 +22,8 @@ from avap.model_zoo import MigraphxModel
 from avap.muxed_pipeline import MuxedPipeline
 from avap.streammux import MuxConfig
 from avap.streaming_labels import COCO_LABELS
+from avap.nvdcf import NvDcfConfig, NvDcfTracker
+from avap.ocsort import OcSortTracker
 from avap.tracker import TrackerBank
 
 
@@ -40,7 +42,8 @@ def main():
     ap.add_argument("--pace-fps", type=float, default=None,
                     help="throttle each decoder to emulate live cameras")
     ap.add_argument("--conf", type=float, default=0.3)
-    ap.add_argument("--track", action="store_true")
+    ap.add_argument("--track", action="store_true", help="OC-SORT (motion only)")
+    ap.add_argument("--nvdcf", action="store_true", help="NvDCF-class visual tracker on the canvas")
     ap.add_argument("--jsonl", default=None)
     ap.add_argument("--max-seconds", type=float, default=120)
     args = ap.parse_args()
@@ -72,7 +75,10 @@ def main():
                              "track_id": o.track_id} for o in fm.objects]}) + "\n")
 
     pipe = MuxedPipeline(model, cfg, sink, conf_threshold=args.conf,
-                         tracker_bank=TrackerBank() if args.track else None,
+                         tracker_bank=(TrackerBank(lambda: NvDcfTracker(NvDcfConfig(checkClassMatch=0), backend="hip"))
+                                       if args.nvdcf else
+                                       TrackerBank(lambda: OcSortTracker(0.25, max_age=90, min_hits=5))
+                                       if args.track else None),
                          pace_fps=args.pace_fps, labels=COCO_LABELS)
     comps = collections.Counter()
     sizes = collections.Counter()
