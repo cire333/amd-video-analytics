@@ -78,7 +78,9 @@ class _Stage:
     def __init__(self, config: InferConfig, device_ordinal: int = 0):
         self.config = config
         self.device_ordinal = device_ordinal
+        self.device_resident = False   # set by the pipeline before prepare()
         self._model = None
+        self._dev_model = None
         self._input_hw: tuple[int, int] | None = None
 
     def prepare(self) -> None:
@@ -86,13 +88,42 @@ class _Stage:
         from ..model_zoo import MigraphxModel, resolve_model
         onnx = resolve_model(self.config.model) \
             if not self.config.model.endswith(".onnx") else self.config.model
-        self._model = MigraphxModel(onnx, self.config.quant, self.device_ordinal)
-        shape = self._model.input_shape          # (1, 3, H, W)
+        if self.device_resident:
+            from .device import DeviceModel
+            self._dev_model = DeviceModel(onnx, self.config.quant,
+                                          self.device_ordinal)
+            shape = self._dev_model.input_shape
+        else:
+            self._model = MigraphxModel(onnx, self.config.quant,
+                                        self.device_ordinal)
+            shape = self._model.input_shape      # (1, 3, H, W)
         self._input_hw = (int(shape[2]), int(shape[3]))
 
     def _infer(self, rgb_hwc: np.ndarray) -> np.ndarray:
         h, w = self._input_hw
         return self._model(_resize_chw(rgb_hwc, w, h))
+
+    def _infer_bbox(self, rgb: np.ndarray, dev, frame: AdvFrameMeta,
+                    bbox: tuple[float, float, float, float] | None):
+        """Run the model over one frame region (bbox=None = whole frame).
+        Device path: the HIP crop+resize kernel fills the model's device
+        input buffer straight from the device frame — no PCIe frame
+        traffic. Host path: numpy crop + cv2 resize + upload.
+        Returns (outputs, rect) or (None, None) for a degenerate region."""
+        fw, fh = frame.frame_width, frame.frame_height
+        if bbox is None:
+            rect = (0, 0, fw, fh)
+        else:
+            x1 = max(0, int(bbox[0])); y1 = max(0, int(bbox[1]))
+            x2 = min(fw, int(bbox[2])); y2 = min(fh, int(bbox[3]))
+            if x2 <= x1 or y2 <= y1:
+                return None, None
+            rect = (x1, y1, x2 - x1, y2 - y1)
+        if self._dev_model is not None and dev is not None:
+            return self._dev_model.run_crop(dev, rect), rect
+        region = rgb if bbox is None else rgb[rect[1]:rect[1] + rect[3],
+                                              rect[0]:rect[0] + rect[2]]
+        return self._infer(region), rect
 
     def _targets(self, frame: AdvFrameMeta) -> list[AdvObjectMeta]:
         cfg = self.config
@@ -123,8 +154,9 @@ class PrimaryStage(_Stage):
         super().__init__(config, device_ordinal)
         self.parse = parse
 
-    def run(self, frame_rgb: np.ndarray, frame: AdvFrameMeta) -> None:
-        out = self._infer(frame_rgb)
+    def run(self, frame_rgb: np.ndarray, frame: AdvFrameMeta,
+            dev=None) -> None:
+        out, _ = self._infer_bbox(frame_rgb, dev, frame, None)
         ih, iw = self._input_hw
         sx, sy = frame.frame_width / iw, frame.frame_height / ih
         for bbox, score, cls in self.parse(out, self.config.conf_threshold):
@@ -142,18 +174,16 @@ class DetectionStage(_Stage):
         super().__init__(config, device_ordinal)
         self.parse = parse
 
-    def run(self, frame_rgb: np.ndarray, frame: AdvFrameMeta) -> None:
+    def run(self, frame_rgb: np.ndarray, frame: AdvFrameMeta,
+            dev=None) -> None:
         new_children = []
         for parent in self._targets(frame):
-            crop = _crop(frame_rgb, parent.bbox,
-                         frame.frame_width, frame.frame_height)
-            if crop is None:
+            out, rect = self._infer_bbox(frame_rgb, dev, frame, parent.bbox)
+            if out is None:
                 continue
-            out = self._infer(crop)
             ih, iw = self._input_hw
-            ch, cw = crop.shape[:2]
+            ox, oy, cw, ch = rect
             sx, sy = cw / iw, ch / ih
-            ox, oy = max(0, parent.bbox[0]), max(0, parent.bbox[1])
             for bbox, score, cls in self.parse(out, self.config.conf_threshold):
                 child = AdvObjectMeta(
                     object_id=None, component_id=self.config.component_id,
@@ -176,13 +206,13 @@ class ClassifierStage(_Stage):
         super().__init__(config, device_ordinal)
         self.parse = parse
 
-    def run(self, frame_rgb: np.ndarray, frame: AdvFrameMeta) -> None:
+    def run(self, frame_rgb: np.ndarray, frame: AdvFrameMeta,
+            dev=None) -> None:
         for obj in self._targets(frame):
-            crop = _crop(frame_rgb, obj.bbox,
-                         frame.frame_width, frame.frame_height)
-            if crop is None:
+            out, _ = self._infer_bbox(frame_rgb, dev, frame, obj.bbox)
+            if out is None:
                 continue
-            result = self.parse(self._infer(crop), self.config.labels)
+            result = self.parse(out, self.config.labels)
             if result is not None:
                 obj.classifications.append(Classification(
                     component_id=self.config.component_id,
@@ -193,13 +223,13 @@ class EmbeddingStage(_Stage):
     """SGIE tensor stage: attaches the raw output vector to the object
     (output-tensor-meta=1 analog)."""
 
-    def run(self, frame_rgb: np.ndarray, frame: AdvFrameMeta) -> None:
+    def run(self, frame_rgb: np.ndarray, frame: AdvFrameMeta,
+            dev=None) -> None:
         for obj in self._targets(frame):
-            crop = _crop(frame_rgb, obj.bbox,
-                         frame.frame_width, frame.frame_height)
-            if crop is None:
+            out, _ = self._infer_bbox(frame_rgb, dev, frame, obj.bbox)
+            if out is None:
                 continue
-            vec = self._infer(crop).reshape(-1).astype(np.float32)
+            vec = out.reshape(-1).astype(np.float32)
             if self.config.normalize_output:
                 norm = np.linalg.norm(vec)
                 if norm > 0:

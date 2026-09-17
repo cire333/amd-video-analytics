@@ -12,6 +12,7 @@ re-identification.
 from .meta import AdvObjectMeta, AdvFrameMeta, Classification
 from .stages import (ClassifierStage, DetectionStage, EmbeddingStage,
                      InferConfig, PrimaryStage)
+from .device import DeviceFrame, DeviceModel, device_api_available
 from .pipeline import AdvancedPipeline, SourceContext
 from .publisher import DataPublisher, FileTransport
 from .metrics import PerfData
@@ -21,7 +22,8 @@ from .records import ObjectRecord, DataRecord, ClassMapper
 __all__ = [
     "AdvFrameMeta", "AdvObjectMeta", "AdvancedPipeline", "Classification",
     "ClassMapper", "ClassifierStage", "DataPublisher", "DataRecord",
-    "DetectionStage", "EmbeddingStage", "FileTransport", "InferConfig",
+    "DetectionStage", "DeviceFrame", "DeviceModel", "EmbeddingStage",
+    "FileTransport", "InferConfig", "device_api_available",
     "LPRConfig", "LPRResult", "LPRStage", "ObjectRecord", "PerfData",
     "PlateVoter", "PrimaryStage", "SourceContext", "VehicleReID",
 ]

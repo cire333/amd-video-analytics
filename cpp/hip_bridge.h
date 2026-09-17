@@ -30,6 +30,29 @@ void nv12_dmabuf_to_rgb(const ConvertRequest& req, float* out_host);
 void nv12_host_to_rgb(const ConvertRequest& req, const uint8_t* nv12,
                       size_t nv12_size, float* out_host);
 
+// --- Device-resident frames (GPU SGIE crop path) ---------------------------
+// Same conversions, but the RGB tensor STAYS on the GPU; the returned
+// pointer (as uintptr) must be released with free_device_buffer.
+uintptr_t nv12_dmabuf_to_device_rgb(const ConvertRequest& req);
+uintptr_t nv12_host_to_device_rgb(const ConvertRequest& req,
+                                  const uint8_t* nv12, size_t nv12_size);
+
+// Crop + bilinear-resize from a device CHW RGB frame directly into a
+// destination device buffer (e.g. a MIGraphX input argument's data_ptr).
+// Synchronizes before returning so the consumer can read immediately.
+void rgb_crop_resize_device(uintptr_t src, int src_w, int src_h,
+                            int cx, int cy, int cw, int ch,
+                            uintptr_t dst, int dst_w, int dst_h,
+                            int device_ordinal);
+
+void device_rgb_to_host(uintptr_t src, size_t n_floats, float* out_host);
+void free_device_buffer(uintptr_t ptr);
+
+// Kernel launcher (defined in kernels.hip).
+void launch_rgb_crop_resize(const float* src, int src_w, int src_h,
+                            int cx, int cy, int cw, int ch,
+                            float* dst, int dst_w, int dst_h, void* stream);
+
 int hip_device_count();
 
 // Kernel launcher (defined in kernels.hip).
