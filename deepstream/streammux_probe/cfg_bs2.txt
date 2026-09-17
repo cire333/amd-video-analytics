@@ -1,0 +1,10 @@
+[property]
+algorithm-type=1
+batch-size=2
+adaptive-batching=0
+max-fps-control=0
+overall-max-fps-n=120
+overall-max-fps-d=1
+overall-min-fps-n=5
+overall-min-fps-d=1
+max-same-source-frames=1

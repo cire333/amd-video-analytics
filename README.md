@@ -54,7 +54,12 @@ scripts/           setup_system.sh (sudo), verify_env.sh
       pixel-correct vs CPU reference (see docs/SETUP.md findings)
 - [ ] Zero-copy decode path: evaluate rocDecode vs GFX12 detile kernel
 - [ ] V1: single stream e2e with a real detector; 3090 parity comparison
-- [ ] Multi-stream + hot add/remove under load; fd-leak soak test
+- [x] nvstreammux reverse-engineered on the 3090 and ported: `avap.streammux`
+      (legacy + new batching policies, NvDsFrameMeta-equivalent metadata),
+      `avap.canvas` (fused NV12→RGB→letterbox batch tensor on the GPU),
+      `avap.muxed_pipeline` + `examples/multi_stream_mux.py` — 4 streams,
+      batched YOLO, 138 fps on the R9700 (docs/nvstreammux_reverse_engineering.md)
+- [ ] Multi-stream hot add/remove under load; fd-leak soak test
 - [ ] Zero-copy inference input (ORT IOBinding / DLPack), HIP-stream overlap
 - [ ] Per-GFX-gen tuning; detile kernel if linear export profiles badly
 
