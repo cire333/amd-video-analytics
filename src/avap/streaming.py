@@ -36,6 +36,7 @@ from typing import Callable
 import numpy as np
 
 from .capabilities import DeviceCapabilities, probe_devices
+from .events import EventCallback, RetryPolicy, StreamEvent
 from .frame import ObjectMeta
 from .bytetrack import ByteTracker
 from .kalman_tracker import SortTracker
@@ -64,8 +65,6 @@ def _coco_labels() -> list[str]:
         COCO = COCO_LABELS
     return COCO
 
-RECONNECT_INITIAL_S = 1.0
-RECONNECT_MAX_S = 60.0
 
 
 def resolve_data_location(data_location: str) -> str:
@@ -123,7 +122,9 @@ class AMDStream:
                  batch_size: int = 1, output_format_template: str | None = None,
                  output_format: str = "json", frame_sample_rate: float | None = None,
                  conf_threshold: float = 0.3, source_id: str | None = None,
-                 device: DeviceCapabilities | None = None, imgsz: int = 640):
+                 device: DeviceCapabilities | None = None, imgsz: int = 640,
+                 retry_policy: RetryPolicy | None = None,
+                 on_event: EventCallback | None = None):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         if frame_sample_rate is not None and frame_sample_rate <= 0:
@@ -145,8 +146,14 @@ class AMDStream:
         self.imgsz = imgsz
         self.device = device
 
+        self.retry_policy = retry_policy  # None -> manager default or RetryPolicy()
+        self.on_event = on_event
+
         self.state = "configured"   # -> starting -> running -> stopped/failed/eof
         self.frames_processed = 0
+        self.restarts = 0           # successful reattachments
+        self.sink_errors = 0        # records dropped due to output failures
+        self.last_error: str | None = None
         self._model: MigraphxModel | None = None
         self._sink: Sink | None = None
         self._stop = threading.Event()
@@ -164,17 +171,28 @@ class AMDStream:
                     raise RuntimeError("no AMD device with a decode engine found")
                 self.device = amd[0]
             self._uri = resolve_data_location(self.data_location)
-            onnx = resolve_model(self.model_name, self.batch_size, self.imgsz)
-            self._model = MigraphxModel(onnx, self.model_quant,
-                                        self.device.device_ordinal)
+            if isinstance(self.model_name, (list, tuple)):
+                # daisy-chained models: frame handoff stays on the GPU
+                from .chain import ModelChain
+                self._model = ModelChain(list(self.model_name),
+                                         self.model_quant,
+                                         self.device.device_ordinal,
+                                         self.batch_size)
+            else:
+                onnx = resolve_model(self.model_name, self.batch_size, self.imgsz)
+                self._model = MigraphxModel(onnx, self.model_quant,
+                                            self.device.device_ordinal)
             self._sink = make_sink(self.output_location, self.output_format,
                                    self.output_format_template)
-            # fail fast on an unopenable source before declaring running
             from . import _core
             self._decoder_factory = lambda: _core.Decoder(
                 self._uri, self.device.drm_render_node)
-            dec = self._decoder_factory()
-            dec.close()
+            # Files fail fast (an unopenable file never heals); live network
+            # sources skip the probe — a camera that's down at startup goes
+            # through the same retry cycle + events as one that drops later.
+            if not self._uri.startswith(("rtsp://", "http://", "https://")):
+                dec = self._decoder_factory()
+                dec.close()
         except Exception:
             self.state = "failed"
             raise
@@ -186,6 +204,9 @@ class AMDStream:
 
     def stop_stream(self) -> None:
         self._stop.set()
+        dec = getattr(self, "_active_decoder", None)
+        if dec is not None:
+            dec.abort()  # unblock a thread stuck in network I/O immediately
         if self._thread is not None:
             self._thread.join(timeout=10.0)
         if self._sink is not None:
@@ -203,26 +224,60 @@ class AMDStream:
 
     # -- processing ----------------------------------------------------------
 
+    def _emit_event(self, type_: str, **kw) -> None:
+        """Report a lifecycle event; a broken reporter never kills the stream."""
+        event = StreamEvent(type=type_, source_id=self.source_id,
+                            frames_processed=self.frames_processed, **kw)
+        log.info("[%s] %s%s", self.source_id, type_,
+                 f" ({event.error})" if event.error else "")
+        if self.on_event is not None:
+            try:
+                self.on_event(event)
+            except Exception:
+                log.exception("[%s] on_event callback raised; ignoring",
+                              self.source_id)
+
     def _run(self) -> None:
         is_live = self._uri.startswith(("rtsp://", "http://", "https://"))
-        backoff = RECONNECT_INITIAL_S
+        policy = self.retry_policy or RetryPolicy()
+        attempt = 0
         while not self._stop.is_set():
+            connected_at = time.monotonic()
             try:
-                self._process_source()
+                self._emit_event("connecting", attempt=attempt)
+                self._process_source()  # emits "connected" once frames flow
                 if not is_live:
                     self.state = "eof"
+                    self._emit_event("eof")
                     return
-                backoff = RECONNECT_INITIAL_S
-            except Exception:
-                log.exception("[%s] stream error; retry in %.0fs",
-                              self.source_id, backoff)
+                self.last_error = None
+                self._emit_event("disconnected")  # live source ended cleanly
+            except Exception as e:
+                self.last_error = repr(e)
+                log.exception("[%s] stream error", self.source_id)
+                self._emit_event("disconnected", error=self.last_error)
+            if self._stop.is_set():
+                return
+            # a connection that held for reset_after_s starts a fresh cycle
+            if time.monotonic() - connected_at >= policy.reset_after_s:
+                attempt = 0
+            attempt += 1
+            if policy.max_retries is not None and attempt > policy.max_retries:
+                self.state = "failed"
+                self._emit_event("gave_up", attempt=attempt - 1,
+                                 error=self.last_error)
+                return
+            backoff = policy.backoff(attempt)
+            self._emit_event("reconnecting", attempt=attempt, backoff_s=backoff)
             if self._stop.wait(backoff):
                 return
-            backoff = min(backoff * 2, RECONNECT_MAX_S)
+            self.restarts += 1
 
     def _process_source(self) -> None:
         from . import _core
         dec = self._decoder_factory()
+        self._active_decoder = dec
+        self._emit_event("connected")
         sample_period_us = (None if self.frame_sample_rate is None
                             else 1_000_000 / self.frame_sample_rate)
         next_sample_us = -1.0
@@ -257,6 +312,7 @@ class AMDStream:
                 padded = batch + [np.zeros_like(batch[0])] * pad
                 self._infer_and_emit(padded, meta)
         finally:
+            self._active_decoder = None
             dec.close()
 
     def _convert(self, f):
@@ -300,11 +356,19 @@ class AMDStream:
                 if s >= self.conf_threshold
             ]
             tracked = self.tracker.update(dets)
-            self._sink.emit(frame_record(
+            rec = frame_record(
                 self.source_id, frame_idx, pts_us,
                 [{"track_id": o.track_id, "label": o.label,
                   "class_id": o.class_id, "conf": round(o.confidence, 4),
-                  "bbox": [round(v, 1) for v in o.bbox]} for o in tracked]))
+                  "bbox": [round(v, 1) for v in o.bbox]} for o in tracked])
+            try:
+                self._sink.emit(rec)
+            except Exception as e:
+                # an output outage must not stall decode/inference: drop the
+                # record, report it, keep the stream alive. The callback can
+                # decide to stop_stream() if data loss is unacceptable.
+                self.sink_errors += 1
+                self._emit_event("sink_error", error=repr(e))
 
 
 class AMDGPUManager:
@@ -313,7 +377,11 @@ class AMDGPUManager:
     are left pending, and already-running streams are unaffected."""
 
     def __init__(self, device_id: int = 0, config: dict | None = None):
+        # config keys: start_stagger_s, stop_on_failure, on_event (default
+        # StreamEvent reporter for streams that don't set their own),
+        # retry_policy (default RetryPolicy likewise)
         self.config = {"start_stagger_s": 0.5, "stop_on_failure": True,
+                       "on_event": None, "retry_policy": None,
                        **(config or {})}
         amd = [d for d in probe_devices() if d.has_decode_engine]
         if device_id >= len(amd):
@@ -324,6 +392,10 @@ class AMDGPUManager:
 
     def add_stream(self, stream: AMDStream) -> None:
         stream.device = self.device
+        if stream.on_event is None and self.config["on_event"] is not None:
+            stream.on_event = self.config["on_event"]
+        if stream.retry_policy is None:
+            stream.retry_policy = self.config["retry_policy"]
         self.streams.append(stream)
 
     def start_streams(self) -> None:
@@ -352,5 +424,8 @@ class AMDGPUManager:
 
     def status(self) -> dict[str, dict]:
         return {s.source_id: {"state": s.state,
-                              "frames_processed": s.frames_processed}
+                              "frames_processed": s.frames_processed,
+                              "restarts": s.restarts,
+                              "sink_errors": s.sink_errors,
+                              "last_error": s.last_error}
                 for s in self.streams}

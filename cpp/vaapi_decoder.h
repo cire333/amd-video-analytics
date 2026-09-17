@@ -3,6 +3,7 @@
 // One instance per stream; owns its AVFormatContext/AVCodecContext and the
 // VAAPI hw device bound to a specific DRM render node.
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -41,14 +42,25 @@ public:
     VaapiDecoder(const VaapiDecoder&) = delete;
     VaapiDecoder& operator=(const VaapiDecoder&) = delete;
 
-    // Blocking. nullopt on EOF; throws std::runtime_error on decode/export error.
+    // Blocking, but bounded: network I/O is aborted after connect_timeout_s
+    // (during open) / read_timeout_s (per frame) via FFmpeg's interrupt
+    // callback, and immediately when abort() is called from another thread.
+    // nullopt on EOF; throws std::runtime_error on decode/export/timeout error.
     std::optional<DecodedFrame> next_frame();
+    void abort();   // thread-safe: unblocks a stuck open/read
     void close();
+
+    static constexpr double kConnectTimeoutS = 15.0;
+    static constexpr double kReadTimeoutS = 30.0;
 
 private:
     std::optional<DecodedFrame> export_frame(AVFrame* frame);
     void transfer_to_host(AVFrame* frame, DecodedFrame& out);
+    static int interrupt_cb(void* opaque);
+    void arm_deadline(double seconds);
 
+    std::atomic<bool> abort_{false};
+    std::atomic<int64_t> deadline_us_{0};
     AVFormatContext* fmt_ = nullptr;
     AVCodecContext* codec_ = nullptr;
     AVBufferRef* hw_device_ = nullptr;

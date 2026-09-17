@@ -8,6 +8,8 @@ from .capabilities import DeviceCapabilities, probe_devices
 from .frame import (BatchMeta, ColorMatrix, ColorRange, CropRect, FrameMeta,
                     ObjectMeta, PlaneLayout, RawFrame)
 from .bytetrack import ByteTracker
+from .chain import ModelChain
+from .events import RetryPolicy, StreamEvent
 from .graph import GraphExecutor, ModelGraph, OnnxModel
 from .kalman_tracker import SortTracker
 from .ocsort import OcSortTracker
@@ -23,9 +25,9 @@ __version__ = "0.1.0"
 __all__ = [
     "AMDGPUManager", "AMDStream", "ByteTracker",
     "BatchMeta", "ColorMatrix", "ColorRange", "CropRect", "DeviceCapabilities",
-    "DynamicBatcher", "FrameMeta", "GraphExecutor", "IouTracker", "ModelGraph",
+    "DynamicBatcher", "FrameMeta", "GraphExecutor", "IouTracker", "ModelChain", "ModelGraph",
     "ObjectMeta", "OcSortTracker", "OnnxModel", "Pipeline", "PlaneLayout", "RawFrame",
-    "RoiConfig", "RoiTransform", "SortTracker", "StreamRegistry", "TrackerBank",
-    "MuxBatch", "MuxConfig", "MuxEvent", "MuxFrameMeta", "SourceConfig", "StreamMux",
-    "StreamMuxRunner", "probe_devices",
+    "MuxBatch", "MuxConfig", "MuxEvent", "MuxFrameMeta", "RetryPolicy", "RoiConfig",
+    "RoiTransform", "SortTracker", "SourceConfig", "StreamEvent", "StreamMux",
+    "StreamMuxRunner", "StreamRegistry", "TrackerBank", "probe_devices",
 ]

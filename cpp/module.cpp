@@ -47,6 +47,8 @@ PYBIND11_MODULE(_core, m) {
                  if (!f) return py::none();
                  return py::cast(*f);
              })
+        .def("abort", &VaapiDecoder::abort,
+             "Thread-safe: unblocks a next_frame() stuck in network I/O")
         .def("close", &VaapiDecoder::close);
 
     m.def("nv12_dmabuf_to_rgb",
@@ -200,6 +202,76 @@ PYBIND11_MODULE(_core, m) {
           py::arg("nv12"), py::arg("planes"), py::arg("src_rect"), py::arg("full_range"),
           py::arg("bt709"), py::arg("device_ordinal"), py::arg("d_slot"), py::arg("canvas_wh"),
           py::arg("dst_rect"), py::arg("nearest") = false);
+
+#ifdef AVAP_WITH_HIP
+    auto fill_req = [](std::vector<std::pair<uint32_t, uint32_t>>& planes,
+                       std::tuple<int, int, int, int> src_rect,
+                       std::tuple<int, int> dst_wh, bool full_range, bool bt709,
+                       int device_ordinal) {
+        ConvertRequest req;
+        req.planes = std::move(planes);
+        std::tie(req.src_x, req.src_y, req.src_w, req.src_h) = src_rect;
+        std::tie(req.dst_w, req.dst_h) = dst_wh;
+        req.full_range = full_range;
+        req.bt709 = bt709;
+        req.device_ordinal = device_ordinal;
+        return req;
+    };
+
+    // Device-resident frame API (GPU SGIE crop path). Returned handles are
+    // raw device pointers as ints; free with free_device_buffer.
+    m.def("nv12_dmabuf_to_device_rgb",
+          [fill_req](int fd, int surf_w, int surf_h,
+                     std::vector<std::pair<uint32_t, uint32_t>> planes,
+                     uint64_t modifier, std::tuple<int, int, int, int> src_rect,
+                     std::tuple<int, int> dst_wh, bool full_range, bool bt709,
+                     int device_ordinal) -> uintptr_t {
+              auto req = fill_req(planes, src_rect, dst_wh, full_range, bt709,
+                                  device_ordinal);
+              req.dmabuf_fd = fd;
+              req.surf_width = surf_w;
+              req.surf_height = surf_h;
+              req.drm_modifier = modifier;
+              py::gil_scoped_release release;
+              return nv12_dmabuf_to_device_rgb(req);
+          });
+
+    m.def("nv12_host_to_device_rgb",
+          [fill_req](py::bytes nv12,
+                     std::vector<std::pair<uint32_t, uint32_t>> planes,
+                     std::tuple<int, int, int, int> src_rect,
+                     std::tuple<int, int> dst_wh, bool full_range, bool bt709,
+                     int device_ordinal) -> uintptr_t {
+              auto req = fill_req(planes, src_rect, dst_wh, full_range, bt709,
+                                  device_ordinal);
+              auto data = nv12.cast<std::string_view>();
+              py::gil_scoped_release release;
+              return nv12_host_to_device_rgb(
+                  req, reinterpret_cast<const uint8_t*>(data.data()),
+                  data.size());
+          });
+
+    m.def("rgb_crop_resize_device",
+          [](uintptr_t src, int src_w, int src_h,
+             std::tuple<int, int, int, int> crop, uintptr_t dst,
+             int dst_w, int dst_h, int device_ordinal) {
+              auto [cx, cy, cw, ch] = crop;
+              py::gil_scoped_release release;
+              rgb_crop_resize_device(src, src_w, src_h, cx, cy, cw, ch,
+                                     dst, dst_w, dst_h, device_ordinal);
+          });
+
+    m.def("device_rgb_to_host",
+          [](uintptr_t src, int w, int h) -> py::array_t<float> {
+              auto out = py::array_t<float>({3, h, w});
+              py::gil_scoped_release release;
+              device_rgb_to_host(src, 3ull * w * h, out.mutable_data());
+              return out;
+          });
+
+    m.def("free_device_buffer",
+          [](uintptr_t ptr) { free_device_buffer(ptr); });
+#endif
 
     m.def("hip_device_count", []() -> int {
 #ifdef AVAP_WITH_HIP

@@ -138,6 +138,33 @@ __global__ void nv12_to_rgb_kernel(const uint8_t* __restrict__ y_plane,
     out[2 * plane_sz + idx] = fminf(fmaxf(b, 0.0f), 1.0f);
 }
 
+__global__ void rgb_crop_resize_kernel(const float* __restrict__ src,
+                                       int src_w, int src_h,
+                                       int cx, int cy, int cw, int ch,
+                                       float* __restrict__ dst,
+                                       int dst_w, int dst_h) {
+    const int ox = blockIdx.x * blockDim.x + threadIdx.x;
+    const int oy = blockIdx.y * blockDim.y + threadIdx.y;
+    if (ox >= dst_w || oy >= dst_h) return;
+
+    const float sx = cx + (ox + 0.5f) * cw / dst_w - 0.5f;
+    const float sy = cy + (oy + 0.5f) * ch / dst_h - 0.5f;
+    int x0 = static_cast<int>(floorf(sx)), y0 = static_cast<int>(floorf(sy));
+    const float fx = sx - x0, fy = sy - y0;
+    const int x1 = min(x0 + 1, src_w - 1), y1 = min(y0 + 1, src_h - 1);
+    x0 = max(x0, 0); y0 = max(y0, 0);
+
+    const int src_plane = src_w * src_h;
+    const int dst_plane = dst_w * dst_h;
+    for (int c = 0; c < 3; ++c) {
+        const float* p = src + c * src_plane;
+        const float v =
+            (p[y0 * src_w + x0] * (1 - fx) + p[y0 * src_w + x1] * fx) * (1 - fy) +
+            (p[y1 * src_w + x0] * (1 - fx) + p[y1 * src_w + x1] * fx) * fy;
+        dst[c * dst_plane + oy * dst_w + ox] = v;
+    }
+}
+
 }  // namespace
 
 void launch_nv12_to_rgb_canvas(const uint8_t* y_plane, const uint8_t* uv_plane,
@@ -154,6 +181,17 @@ void launch_nv12_to_rgb_canvas(const uint8_t* y_plane, const uint8_t* uv_plane,
                        src_x, src_y, src_w, src_h,
                        out, canvas_w, canvas_h, dst_x, dst_y, dst_w, dst_h,
                        full_range, bt709, nearest);
+}
+
+void launch_rgb_crop_resize(const float* src, int src_w, int src_h,
+                            int cx, int cy, int cw, int ch,
+                            float* dst, int dst_w, int dst_h, void* stream) {
+    const dim3 block(16, 16);
+    const dim3 grid((dst_w + block.x - 1) / block.x,
+                    (dst_h + block.y - 1) / block.y);
+    hipLaunchKernelGGL(rgb_crop_resize_kernel, grid, block, 0,
+                       static_cast<hipStream_t>(stream),
+                       src, src_w, src_h, cx, cy, cw, ch, dst, dst_w, dst_h);
 }
 
 void launch_nv12_to_rgb(const uint8_t* y_plane, const uint8_t* uv_plane,

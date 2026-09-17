@@ -150,6 +150,11 @@ class StubStream:
         self.tracker = object()
         self.state = "configured"
         self.frames_processed = 0
+        self.restarts = 0
+        self.sink_errors = 0
+        self.last_error = None
+        self.on_event = None
+        self.retry_policy = None
         self._fail = fail
 
     def start_stream(self):
