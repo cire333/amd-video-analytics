@@ -18,6 +18,7 @@ pkg_check_modules(LIBDRM REQUIRED IMPORTED_TARGET libdrm)
 set(AVAP_SOURCES
     cpp/module.cpp
     cpp/vaapi_decoder.cpp
+    cpp/vcn_encoder.cpp
 )
 
 if(AVAP_WITH_HIP)

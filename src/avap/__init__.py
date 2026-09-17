@@ -9,6 +9,7 @@ from .frame import (BatchMeta, ColorMatrix, ColorRange, CropRect, FrameMeta,
                     ObjectMeta, PlaneLayout, RawFrame)
 from .bytetrack import ByteTracker
 from .chain import ModelChain
+from .encode import VideoEncoder
 from .events import RetryPolicy, StreamEvent
 from .graph import GraphExecutor, ModelGraph, OnnxModel
 from .kalman_tracker import SortTracker
@@ -29,5 +30,5 @@ __all__ = [
     "ObjectMeta", "OcSortTracker", "OnnxModel", "Pipeline", "PlaneLayout", "RawFrame",
     "MuxBatch", "MuxConfig", "MuxEvent", "MuxFrameMeta", "RetryPolicy", "RoiConfig",
     "RoiTransform", "SortTracker", "SourceConfig", "StreamEvent", "StreamMux",
-    "StreamMuxRunner", "StreamRegistry", "TrackerBank", "probe_devices",
+    "StreamMuxRunner", "StreamRegistry", "TrackerBank", "VideoEncoder", "probe_devices",
 ]
