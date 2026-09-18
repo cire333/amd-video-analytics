@@ -23,11 +23,15 @@ public:
     RocDecoder& operator=(const RocDecoder&) = delete;
 
     // Decode the next frame and convert to CHW float RGB entirely on the
-    // GPU. Returns false on EOF. *rgb_out is a device buffer the caller
-    // owns (free with free_device_buffer).
+    // GPU, honoring the stream's tagged colorimetry (probed at open;
+    // untagged defaults to BT.709 limited, matching the VAAPI backend).
+    // Returns false on EOF. *rgb_out is a device buffer the caller owns
+    // (free with free_device_buffer).
     bool next_frame_device_rgb(uintptr_t* rgb_out, int* width, int* height,
-                               int64_t* pts_us, bool bt709 = true,
-                               bool full_range = false);
+                               int64_t* pts_us);
+
+    bool stream_bt709() const;
+    bool stream_full_range() const;
 
     // Compat path: same decode, NV12 copied to host (annotation, or code
     // written against the VAAPI decoder's host fallback). Fills nv12_out

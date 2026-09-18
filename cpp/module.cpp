@@ -411,17 +411,18 @@ PYBIND11_MODULE(_core, m) {
         .def(py::init<const std::string&, int>(),
              py::arg("uri"), py::arg("device_ordinal") = 0)
         .def("next_frame_device_rgb",
-             [](RocDecoder& self, bool bt709, bool full_range) -> py::object {
+             [](RocDecoder& self) -> py::object {
                  uintptr_t rgb = 0; int w = 0, h = 0; int64_t pts = 0;
                  bool ok;
                  {
                      py::gil_scoped_release release;
-                     ok = self.next_frame_device_rgb(&rgb, &w, &h, &pts,
-                                                     bt709, full_range);
+                     ok = self.next_frame_device_rgb(&rgb, &w, &h, &pts);
                  }
                  if (!ok) return py::none();
                  return py::make_tuple(static_cast<uintptr_t>(rgb), w, h, pts);
-             }, py::arg("bt709") = true, py::arg("full_range") = false)
+             })
+        .def_property_readonly("stream_bt709", &RocDecoder::stream_bt709)
+        .def_property_readonly("stream_full_range", &RocDecoder::stream_full_range)
         .def("close", &RocDecoder::close);
     m.attr("has_rocdecode") = true;
 #else

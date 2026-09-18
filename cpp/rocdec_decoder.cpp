@@ -9,6 +9,10 @@
 #include "thirdparty/rocdecode/roc_video_dec.h"
 #include "thirdparty/rocdecode/video_demuxer.h"
 
+extern "C" {
+#include <libavformat/avformat.h>
+}
+
 namespace avap {
 
 namespace {
@@ -25,11 +29,34 @@ struct RocDecoder::Impl {
     int device_ordinal = 0;
     bool eof = false;
     int pending = 0;   // frames decoded but not yet fetched
+    bool bt709 = true;        // untagged -> BT.709 limited (VAAPI-backend parity)
+    bool full_range = false;
 };
+
+// One cheap FFmpeg probe for the stream's colorimetry tags (the rocDecode
+// reference decoder does not expose video_signal_description).
+static void probe_colorimetry(const std::string& uri, bool* bt709,
+                              bool* full_range) {
+    AVFormatContext* fmt = nullptr;
+    if (avformat_open_input(&fmt, uri.c_str(), nullptr, nullptr) != 0) return;
+    if (avformat_find_stream_info(fmt, nullptr) >= 0) {
+        int idx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        if (idx >= 0) {
+            const AVCodecParameters* par = fmt->streams[idx]->codecpar;
+            if (par->color_space == AVCOL_SPC_BT470BG ||
+                par->color_space == AVCOL_SPC_SMPTE170M)
+                *bt709 = false;
+            if (par->color_range == AVCOL_RANGE_JPEG)
+                *full_range = true;
+        }
+    }
+    avformat_close_input(&fmt);
+}
 
 RocDecoder::RocDecoder(const std::string& uri, int device_ordinal)
     : impl_(new Impl) {
     impl_->device_ordinal = device_ordinal;
+    probe_colorimetry(uri, &impl_->bt709, &impl_->full_range);
     impl_->demuxer.reset(new VideoDemuxer(uri.c_str()));
     rocDecVideoCodec codec =
         AVCodec2RocDecVideoCodec(impl_->demuxer->GetCodecID());
@@ -83,9 +110,13 @@ bool RocDecoder::advance(uint8_t** dev_nv12, int64_t* pts) {
     return *dev_nv12 != nullptr;
 }
 
+bool RocDecoder::stream_bt709() const { return impl_->bt709; }
+bool RocDecoder::stream_full_range() const { return impl_->full_range; }
+
 bool RocDecoder::next_frame_device_rgb(uintptr_t* rgb_out, int* width_out,
-                                       int* height_out, int64_t* pts_us,
-                                       bool bt709, bool full_range) {
+                                       int* height_out, int64_t* pts_us) {
+    const bool bt709 = impl_->bt709;
+    const bool full_range = impl_->full_range;
     uint8_t* nv12 = nullptr;
     int64_t pts = 0;
     if (!advance(&nv12, &pts)) return false;

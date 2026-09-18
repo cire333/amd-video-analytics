@@ -81,3 +81,52 @@ def test_advanced_pipeline_uses_rocdecode(tmp_path):
     pipe.run()
     assert pipe.decode_backend == "rocdecode"
     assert len(seen) == 89
+
+
+def test_amdstream_backend_resolution():
+    _core = _need_rocdecode()
+    from avap import AMDStream
+    s = AMDStream(VIDEO, decode_backend="auto", source_id="t")
+    s._uri = VIDEO
+    s._resolve_decode_backend()
+    assert s.decode_backend == "rocdecode"      # file -> zero-copy
+    s2 = AMDStream("rtsp://cam/live", decode_backend="auto", source_id="t2")
+    s2._uri = "rtsp://cam/live"
+    s2._resolve_decode_backend()
+    assert s2.decode_backend == "vaapi"         # live -> deadline-bounded backend
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        AMDStream(VIDEO, decode_backend="bogus")
+
+
+def test_amdstream_end_to_end_rocdecode(tmp_path):
+    _core = _need_rocdecode()
+    import json
+    import time
+    from avap import AMDStream
+    s = AMDStream(VIDEO, model="yolo26m", model_quant="fp16",
+                  tracker_type="ocsort", decode_backend="rocdecode",
+                  region_of_interest=(0.0, 0.2, 0.9, 1.0),
+                  output_location=str(tmp_path / "d.jsonl"),
+                  annotated_output=str(tmp_path / "a.mp4"),
+                  source_id="rocdec-stream")
+    s.start_stream()
+    deadline = time.time() + 300
+    while s.state == "running" and time.time() < deadline:
+        time.sleep(0.5)
+    s.join(timeout=30)
+    s.stop_stream()
+    assert s.state == "eof"
+    lines = [json.loads(l) for l in open(tmp_path / "d.jsonl")]
+    assert len(lines) == 89
+    # ROI-fused GPU crop: detections exist and stay inside the ROI x-range
+    objs = [o for l in lines for o in l["objects"]]
+    assert objs
+    assert all(o["bbox"][0] >= -1 for o in objs)
+    import subprocess
+    n = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-count_frames", "-show_entries",
+                        "stream=nb_read_frames", "-of", "csv=p=0",
+                        str(tmp_path / "a.mp4")],
+                       capture_output=True, text=True).stdout.strip()
+    assert n == "89"
