@@ -159,23 +159,19 @@ def main():
                             (x1, max(12, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX,
                             0.5, col, 2)
             if writer is None:
-                writer = cv2.VideoWriter(f"{out_dir}/annotated_raw.mp4",
-                                         cv2.VideoWriter_fourcc(*"mp4v"), out_fps,
-                                         (bgr.shape[1], bgr.shape[0]))
-            writer.write(bgr)
+                from avap.annotate import AnnotatedVideo
+                writer = AnnotatedVideo(f"{out_dir}/annotated.mp4",
+                                        fps=out_fps, is_bgr=True)
+            writer.write(bgr)  # boxes already drawn above; VCN-encodes
             n_frames += 1
             if n_frames % 25 == 0:
                 print(f"  {n_frames} frames...")
 
     if writer:
-        writer.release()
+        writer.close()
     dec.close()
     dt = time.time() - t_start
     print(f"processed {n_frames} frames in {dt:.1f}s ({n_frames / dt:.1f} fps)")
-    # re-encode for broad playback compatibility
-    os.system(f"ffmpeg -y -loglevel error -i {out_dir}/annotated_raw.mp4 "
-              f"-c:v libx264 -pix_fmt yuv420p {out_dir}/annotated.mp4 "
-              f"&& rm {out_dir}/annotated_raw.mp4")
     print(f"outputs: {out_dir}/detections.jsonl, {out_dir}/annotated.mp4")
 
 

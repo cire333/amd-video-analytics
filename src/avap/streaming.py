@@ -124,7 +124,9 @@ class AMDStream:
                  conf_threshold: float = 0.3, source_id: str | None = None,
                  device: DeviceCapabilities | None = None, imgsz: int = 640,
                  retry_policy: RetryPolicy | None = None,
-                 on_event: EventCallback | None = None):
+                 on_event: EventCallback | None = None,
+                 annotated_output: str | None = None,
+                 annotated_fps: float = 25.0):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         if frame_sample_rate is not None and frame_sample_rate <= 0:
@@ -148,6 +150,11 @@ class AMDStream:
 
         self.retry_policy = retry_policy  # None -> manager default or RetryPolicy()
         self.on_event = on_event
+        # annotated video/RTSP restream (boxes + track ids), VCN-encoded.
+        # Costs one extra full-resolution conversion per processed frame.
+        self.annotated_output = annotated_output
+        self.annotated_fps = annotated_fps
+        self._annotated = None
 
         self.state = "configured"   # -> starting -> running -> stopped/failed/eof
         self.frames_processed = 0
@@ -184,6 +191,10 @@ class AMDStream:
                                             self.device.device_ordinal)
             self._sink = make_sink(self.output_location, self.output_format,
                                    self.output_format_template)
+            if self.annotated_output:
+                from .annotate import AnnotatedVideo
+                self._annotated = AnnotatedVideo(self.annotated_output,
+                                                 fps=self.annotated_fps)
             from . import _core
             self._decoder_factory = lambda: _core.Decoder(
                 self._uri, self.device.drm_render_node)
@@ -212,6 +223,9 @@ class AMDStream:
         if self._sink is not None:
             self._sink.close()
             self._sink = None
+        if self._annotated is not None:
+            self._annotated.close()
+            self._annotated = None
         if self.state == "running":
             self.state = "stopped"
 
@@ -238,6 +252,16 @@ class AMDStream:
                               self.source_id)
 
     def _run(self) -> None:
+        try:
+            self._run_cycle()
+        finally:
+            if self._annotated is not None:  # flush trailer on every exit path
+                try:
+                    self._annotated.close()
+                finally:
+                    self._annotated = None
+
+    def _run_cycle(self) -> None:
         is_live = self._uri.startswith(("rtsp://", "http://", "https://"))
         policy = self.retry_policy or RetryPolicy()
         attempt = 0
@@ -297,12 +321,16 @@ class AMDStream:
                     next_sample_us = max(next_sample_us + sample_period_us,
                                          f.pts_us + 1)
 
-                tensor, transform = self._convert(f)
+                if self._annotated is not None:
+                    tensor, transform, full = self._convert_with_full(f)
+                else:
+                    tensor, transform = self._convert(f)
+                    full = None
                 if self._model.quant == "int8" and not self._model.ready:
                     self._model.calibrate(tensor[None])
                     continue
                 batch.append(tensor)
-                meta.append((self.frames_processed, f.pts_us, transform))
+                meta.append((self.frames_processed, f.pts_us, transform, full))
                 self.frames_processed += 1
                 if len(batch) >= self.batch_size:
                     self._infer_and_emit(batch, meta)
@@ -342,10 +370,43 @@ class AMDStream:
         # transform: model-input px -> full-frame px
         return chw, (rx, ry, src[2] / self.imgsz, src[3] / self.imgsz)
 
+    def _convert_with_full(self, f):
+        """Annotation path: one kernel conversion at FULL resolution (the
+        dmabuf fd is single-use), then the model input is derived from it on
+        the CPU with the same ROI/transform semantics as _convert."""
+        import cv2
+        from . import _core
+        fw, fh = f.crop_w, f.crop_h
+        planes = [tuple(p) for p in f.planes]
+        args = (planes, (f.crop_x, f.crop_y, fw, fh), (fw, fh), f.full_range,
+                f.color_matrix != "bt601", self.device.device_ordinal)
+        if f.dmabuf_fd >= 0:
+            chw = _core.nv12_dmabuf_to_rgb(f.dmabuf_fd, f.width, f.height,
+                                           planes, f.drm_modifier, *args[1:])
+        else:
+            chw = _core.nv12_host_to_rgb(f.host_data, *args)
+        full = (np.clip(chw, 0.0, 1.0) * 255).astype(np.uint8).transpose(1, 2, 0)
+
+        if self.roi is not None:
+            rx, ry, rw, rh = self.roi.crop_rect_px(fw, fh)
+        else:
+            rx = ry = 0
+            rw, rh = fw, fh
+        region = full[ry:ry + rh, rx:rx + rw]
+        tensor = cv2.resize(region, (self.imgsz, self.imgsz),
+                            interpolation=cv2.INTER_LINEAR
+                            ).astype(np.float32).transpose(2, 0, 1) / 255.0
+        if self.roi is not None:
+            mask = cv2.resize(self.roi.mask(fw, fh), (self.imgsz, self.imgsz),
+                              interpolation=cv2.INTER_NEAREST)
+            tensor = tensor * mask[None]
+        return (np.ascontiguousarray(tensor),
+                (rx, ry, rw / self.imgsz, rh / self.imgsz), full)
+
     def _infer_and_emit(self, batch: list[np.ndarray], meta: list) -> None:
         out = self._model(np.stack(batch))  # (B, 300, 6)
         labels = _coco_labels()
-        for bi, (frame_idx, pts_us, (ox, oy, sx, sy)) in enumerate(meta):
+        for bi, (frame_idx, pts_us, (ox, oy, sx, sy), full) in enumerate(meta):
             dets = [
                 ObjectMeta(class_id=int(c), confidence=float(s),
                            bbox=(float(x1) * sx + ox, float(y1) * sy + oy,
@@ -356,6 +417,18 @@ class AMDStream:
                 if s >= self.conf_threshold
             ]
             tracked = self.tracker.update(dets)
+            if self._annotated is not None and full is not None:
+                try:
+                    self._annotated.write(full, tracked)
+                except Exception as e:
+                    # annotation failure must not stall detection output:
+                    # report it and disable the annotated stream
+                    self._emit_event("sink_error",
+                                     error=f"annotated_output: {e!r}")
+                    try:
+                        self._annotated.close()
+                    finally:
+                        self._annotated = None
             rec = frame_record(
                 self.source_id, frame_idx, pts_us,
                 [{"track_id": o.track_id, "label": o.label,
