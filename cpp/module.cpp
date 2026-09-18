@@ -6,6 +6,9 @@
 
 #include "vaapi_decoder.h"
 #include "vcn_encoder.h"
+#ifdef AVAP_WITH_ROCDECODE
+#include "rocdec_decoder.h"
+#endif
 #ifdef AVAP_WITH_HIP
 #include "dcf.h"
 #include "hip_bridge.h"
@@ -401,6 +404,28 @@ PYBIND11_MODULE(_core, m) {
                  return out;
              },
              py::arg("frame"), py::arg("W"), py::arg("H"), py::arg("affine"), py::arg("windows"));
+#endif
+
+#ifdef AVAP_WITH_ROCDECODE
+    py::class_<RocDecoder>(m, "RocDecoder")
+        .def(py::init<const std::string&, int>(),
+             py::arg("uri"), py::arg("device_ordinal") = 0)
+        .def("next_frame_device_rgb",
+             [](RocDecoder& self, bool bt709, bool full_range) -> py::object {
+                 uintptr_t rgb = 0; int w = 0, h = 0; int64_t pts = 0;
+                 bool ok;
+                 {
+                     py::gil_scoped_release release;
+                     ok = self.next_frame_device_rgb(&rgb, &w, &h, &pts,
+                                                     bt709, full_range);
+                 }
+                 if (!ok) return py::none();
+                 return py::make_tuple(static_cast<uintptr_t>(rgb), w, h, pts);
+             }, py::arg("bt709") = true, py::arg("full_range") = false)
+        .def("close", &RocDecoder::close);
+    m.attr("has_rocdecode") = true;
+#else
+    m.attr("has_rocdecode") = false;
 #endif
 
     m.def("hip_device_count", []() -> int {

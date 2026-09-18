@@ -45,6 +45,26 @@ target_link_libraries(_core PRIVATE
 if(AVAP_WITH_HIP)
     target_compile_definitions(_core PRIVATE AVAP_WITH_HIP=1)
     target_link_libraries(_core PRIVATE hip::host hip::hipfft)
+
+    # rocDecode zero-copy decode backend (optional; auto-detected).
+    # ROCDECODE_ROOT env can point at an extracted package for development.
+    find_path(ROCDECODE_INCLUDE rocdecode/rocdecode.h
+              HINTS $ENV{ROCDECODE_ROOT}/include /opt/rocm/include)
+    find_library(ROCDECODE_LIB rocdecode
+                 HINTS $ENV{ROCDECODE_ROOT}/lib /opt/rocm/lib)
+    if(ROCDECODE_INCLUDE AND ROCDECODE_LIB)
+        target_sources(_core PRIVATE cpp/rocdec_decoder.cpp
+                       cpp/thirdparty/rocdecode/roc_video_dec.cpp)
+        target_include_directories(_core PRIVATE
+            ${ROCDECODE_INCLUDE} ${ROCDECODE_INCLUDE}/rocdecode
+            cpp/thirdparty/rocdecode)
+        target_compile_definitions(_core PRIVATE AVAP_WITH_ROCDECODE=1
+            USE_AVCODEC_GREATER_THAN_58_134=1)  # FFmpeg >= 5 (we require it)
+        target_link_libraries(_core PRIVATE ${ROCDECODE_LIB})
+        message(STATUS "rocDecode backend: ${ROCDECODE_LIB}")
+    else()
+        message(STATUS "rocDecode not found; zero-copy decode backend disabled")
+    endif()
 endif()
 
 install(TARGETS _core LIBRARY DESTINATION avap)
