@@ -13,6 +13,7 @@ from .encode import VideoEncoder
 from .events import RetryPolicy, StreamEvent
 from .graph import GraphExecutor, ModelGraph, OnnxModel
 from .kalman_tracker import SortTracker
+from .nvdcf import NvDcfConfig, NvDcfTracker, VisualFrame
 from .ocsort import OcSortTracker
 from .streaming import AMDGPUManager, AMDStream
 from .streammux import MuxBatch, MuxConfig, MuxEvent, MuxFrameMeta, SourceConfig, StreamMux, StreamMuxRunner
@@ -28,6 +29,7 @@ __all__ = [
     "BatchMeta", "ColorMatrix", "ColorRange", "CropRect", "DeviceCapabilities",
     "DynamicBatcher", "FrameMeta", "GraphExecutor", "IouTracker", "ModelChain", "ModelGraph",
     "ObjectMeta", "OcSortTracker", "OnnxModel", "Pipeline", "PlaneLayout", "RawFrame",
+    "NvDcfConfig", "NvDcfTracker", "VisualFrame",
     "MuxBatch", "MuxConfig", "MuxEvent", "MuxFrameMeta", "RetryPolicy", "RoiConfig",
     "RoiTransform", "SortTracker", "SourceConfig", "StreamEvent", "StreamMux",
     "StreamMuxRunner", "StreamRegistry", "TrackerBank", "VideoEncoder", "probe_devices",

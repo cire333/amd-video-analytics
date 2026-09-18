@@ -7,6 +7,7 @@
 #include "vaapi_decoder.h"
 #include "vcn_encoder.h"
 #ifdef AVAP_WITH_HIP
+#include "dcf.h"
 #include "hip_bridge.h"
 #endif
 
@@ -305,6 +306,101 @@ PYBIND11_MODULE(_core, m) {
               }
               return py::bytes(out);
           });
+#endif
+
+    // --- NvDCF-class correlation-filter engine -------------------------------
+    m.def("device_from_host_f32",
+          [](py::array_t<float, py::array::c_style | py::array::forcecast> arr,
+             int device_ordinal) -> uintptr_t {
+#ifdef AVAP_WITH_HIP
+              const size_t n = static_cast<size_t>(arr.nbytes());
+              uintptr_t p = device_alloc(n, device_ordinal);
+              device_upload(p, arr.data(), n);
+              return p;
+#else
+              throw std::runtime_error("avap._core built without HIP");
+#endif
+          }, py::arg("array"), py::arg("device_ordinal") = 0);
+    m.def("device_upload_f32",
+          [](uintptr_t ptr, py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+#ifdef AVAP_WITH_HIP
+              device_upload(ptr, arr.data(), static_cast<size_t>(arr.nbytes()));
+#endif
+          }, py::arg("ptr"), py::arg("array"));
+
+#ifdef AVAP_WITH_HIP
+    py::class_<DcfParams>(m, "DcfParams")
+        .def(py::init<>())
+        .def_readwrite("max_targets", &DcfParams::max_targets)
+        .def_readwrite("feature_size", &DcfParams::feature_size)
+        .def_readwrite("use_gray", &DcfParams::use_gray)
+        .def_readwrite("use_colornames", &DcfParams::use_colornames)
+        .def_readwrite("use_hog", &DcfParams::use_hog)
+        .def_readwrite("lambda_", &DcfParams::lambda)
+        .def_readwrite("gaussian_sigma", &DcfParams::gaussian_sigma)
+        .def_readwrite("focus_offset_y", &DcfParams::focus_offset_y)
+        .def_readwrite("device_ordinal", &DcfParams::device_ordinal);
+
+    py::class_<DcfEngine>(m, "DcfEngine")
+        .def(py::init<const DcfParams&>())
+        .def_property_readonly("channels", &DcfEngine::channels)
+        .def_property_readonly("feature_size", &DcfEngine::feature_size)
+        .def_property_readonly("max_targets", &DcfEngine::max_targets)
+        .def("clear_slot", &DcfEngine::clear_slot)
+        .def("set_gaussian_sigma", &DcfEngine::set_gaussian_sigma)
+        .def("localize",
+             [](DcfEngine& self, uintptr_t frame, int W, int H,
+                std::tuple<float, float, float, float> affine,
+                py::array_t<float, py::array::c_style | py::array::forcecast> windows,
+                py::array_t<int, py::array::c_style | py::array::forcecast> slots) {
+                 const int n = static_cast<int>(slots.shape(0));
+                 if (windows.ndim() != 2 || windows.shape(0) != n || windows.shape(1) != 4)
+                     throw std::runtime_error("windows must be (n, 4)");
+                 const int S = self.feature_size();
+                 auto out = py::array_t<float>({n, S, S});
+                 auto [sx, sy, ox, oy] = affine;
+                 if (n > 0) {
+                     py::gil_scoped_release release;
+                     self.localize(frame, W, H, sx, sy, ox, oy, windows.data(), slots.data(), n,
+                                   out.mutable_data());
+                 }
+                 return out;
+             },
+             py::arg("frame"), py::arg("W"), py::arg("H"), py::arg("affine"), py::arg("windows"),
+             py::arg("slots"))
+        .def("update",
+             [](DcfEngine& self, uintptr_t frame, int W, int H,
+                std::tuple<float, float, float, float> affine,
+                py::array_t<float, py::array::c_style | py::array::forcecast> windows,
+                py::array_t<int, py::array::c_style | py::array::forcecast> slots,
+                py::array_t<uint8_t, py::array::c_style | py::array::forcecast> init, float lr) {
+                 const int n = static_cast<int>(slots.shape(0));
+                 if (n == 0) return;
+                 if (windows.shape(0) != n || init.shape(0) != n)
+                     throw std::runtime_error("windows/slots/init length mismatch");
+                 auto [sx, sy, ox, oy] = affine;
+                 py::gil_scoped_release release;
+                 self.update(frame, W, H, sx, sy, ox, oy, windows.data(), slots.data(),
+                             init.data(), n, lr);
+             },
+             py::arg("frame"), py::arg("W"), py::arg("H"), py::arg("affine"), py::arg("windows"),
+             py::arg("slots"), py::arg("init"), py::arg("lr"))
+        .def("extract_features",
+             [](DcfEngine& self, uintptr_t frame, int W, int H,
+                std::tuple<float, float, float, float> affine,
+                py::array_t<float, py::array::c_style | py::array::forcecast> windows) {
+                 const int n = static_cast<int>(windows.shape(0));
+                 const int S = self.feature_size(), C = self.channels();
+                 auto out = py::array_t<float>({n, C, S, S});
+                 auto [sx, sy, ox, oy] = affine;
+                 if (n > 0) {
+                     py::gil_scoped_release release;
+                     self.extract_features(frame, W, H, sx, sy, ox, oy, windows.data(), n,
+                                           out.mutable_data());
+                 }
+                 return out;
+             },
+             py::arg("frame"), py::arg("W"), py::arg("H"), py::arg("affine"), py::arg("windows"));
 #endif
 
     m.def("hip_device_count", []() -> int {

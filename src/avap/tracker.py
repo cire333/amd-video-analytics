@@ -19,6 +19,14 @@ class TrackerProtocol(Protocol):
         ...
 
 
+class VisualTrackerProtocol(Protocol):
+    """Trackers that also look at pixels (NvDCF-class): the frame is an
+    avap.nvdcf.VisualFrame (device RGB tensor + source->frame affine)."""
+
+    def update(self, detections: list[ObjectMeta], frame=None) -> list[ObjectMeta]:
+        ...
+
+
 def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
     ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
     ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
@@ -65,11 +73,16 @@ class TrackerBank:
         self._factory = tracker_factory
         self._trackers: dict[str, TrackerProtocol] = {}
 
-    def update(self, source_id: str, detections_full_frame: list[ObjectMeta]
-               ) -> list[ObjectMeta]:
+    def update(self, source_id: str, detections_full_frame: list[ObjectMeta],
+               frame=None) -> list[ObjectMeta]:
+        """``frame`` (a VisualFrame) is passed to trackers that accept one;
+        motion-only trackers ignore it."""
         if source_id not in self._trackers:
             self._trackers[source_id] = self._factory()
-        return self._trackers[source_id].update(detections_full_frame)
+        tracker = self._trackers[source_id]
+        if frame is not None and getattr(tracker, "uses_frames", False):
+            return tracker.update(detections_full_frame, frame)
+        return tracker.update(detections_full_frame)
 
     def remove(self, source_id: str) -> None:
         self._trackers.pop(source_id, None)
