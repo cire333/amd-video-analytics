@@ -49,9 +49,11 @@ if(AVAP_WITH_HIP)
     # rocDecode zero-copy decode backend (optional; auto-detected).
     # ROCDECODE_ROOT env can point at an extracted package for development.
     find_path(ROCDECODE_INCLUDE rocdecode/rocdecode.h
-              HINTS $ENV{ROCDECODE_ROOT}/include /opt/rocm/include)
+              HINTS $ENV{ROCDECODE_ROOT}/include
+                    $ENV{HOME}/.local/opt/rocdecode/include /opt/rocm/include)
     find_library(ROCDECODE_LIB rocdecode
-                 HINTS $ENV{ROCDECODE_ROOT}/lib /opt/rocm/lib)
+                 HINTS $ENV{ROCDECODE_ROOT}/lib
+                       $ENV{HOME}/.local/opt/rocdecode/lib /opt/rocm/lib)
     if(ROCDECODE_INCLUDE AND ROCDECODE_LIB)
         target_sources(_core PRIVATE cpp/rocdec_decoder.cpp
                        cpp/thirdparty/rocdecode/roc_video_dec.cpp)
@@ -61,6 +63,11 @@ if(AVAP_WITH_HIP)
         target_compile_definitions(_core PRIVATE AVAP_WITH_ROCDECODE=1
             USE_AVCODEC_GREATER_THAN_58_134=1)  # FFmpeg >= 5 (we require it)
         target_link_libraries(_core PRIVATE ${ROCDECODE_LIB})
+        # make the module find librocdecode wherever it was found at build
+        # time (system /opt/rocm or the sudo-less ~/.local/opt install)
+        get_filename_component(ROCDECODE_LIBDIR ${ROCDECODE_LIB} DIRECTORY)
+        set_property(TARGET _core APPEND PROPERTY INSTALL_RPATH ${ROCDECODE_LIBDIR})
+        set_property(TARGET _core APPEND PROPERTY BUILD_RPATH ${ROCDECODE_LIBDIR})
         message(STATUS "rocDecode backend: ${ROCDECODE_LIB}")
     else()
         message(STATUS "rocDecode not found; zero-copy decode backend disabled")

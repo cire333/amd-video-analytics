@@ -71,3 +71,19 @@ python examples/single_stream.py video.mp4 detector.onnx   # full e2e
    is silently discarded by the ROCm clang link step used when a `.hip`
    file is in the target — the module loses `PyInit__core`. CMakeLists uses
    `NO_EXTRAS` to prevent this.
+
+## rocDecode (zero-copy decode backend)
+
+`sudo apt install rocdecode` fails with an unmet `mesa-amdgpu-va-drivers`
+dependency: that package lives in AMD's separate amdgpu apt repo and would
+replace the system Mesa VA driver that the (validated) VAAPI decode path
+uses. rocDecode runs correctly against system Mesa, so install it locally
+without sudo instead:
+
+    ./scripts/install_rocdecode_local.sh
+    pip install -e . --no-build-isolation   # rebuild; auto-detects it
+
+The build stamps the location into the module rpath — no LD_LIBRARY_PATH.
+If you later want the apt-proper route, add the amdgpu repo and accept the
+VA driver swap (re-run the decode parity tests afterwards), or build an
+equivs stub for mesa-amdgpu-va-drivers.
