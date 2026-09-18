@@ -46,12 +46,10 @@ class ModelChain:
         self._in_names: list[str] = []
         self._out_names: list[list[str]] = []
         shapes: list[dict] = []
+        from .model_zoo import compile_or_load
         for m in models:
             onnx = m if m.endswith(".onnx") else resolve_model(m, batch_size)
-            prog = migraphx.parse_onnx(onnx)
-            if quant == "fp16":
-                migraphx.quantize_fp16(prog)
-            prog.compile(migraphx.get_target("gpu"), offload_copy=False)
+            prog, _ = compile_or_load(onnx, quant, offload_copy=False)
             params = prog.get_parameter_names()
             outs = sorted(p for p in params if p.startswith(OUTPUT_PREFIX))
             ins = [p for p in params if not p.startswith(OUTPUT_PREFIX)]

@@ -90,12 +90,11 @@ class DeviceModel:
         import migraphx
         self._mgx = migraphx
         self.device_ordinal = device_ordinal
-        prog = migraphx.parse_onnx(onnx_path)
-        if quant == "fp16":
-            migraphx.quantize_fp16(prog)
-        elif quant != "fp32":
+        if quant not in ("fp32", "fp16"):
             raise ValueError("DeviceModel supports fp32/fp16")
-        prog.compile(migraphx.get_target("gpu"), offload_copy=False)
+        from ..model_zoo import compile_or_load
+        prog, self.loaded_from_cache = compile_or_load(onnx_path, quant,
+                                                       offload_copy=False)
         self._prog = prog
 
         params = prog.get_parameter_names()
