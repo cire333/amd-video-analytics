@@ -25,8 +25,9 @@ if(AVAP_WITH_HIP)
     list(APPEND CMAKE_PREFIX_PATH /opt/rocm)
     enable_language(HIP)
     find_package(hip REQUIRED)
-    list(APPEND AVAP_SOURCES cpp/hip_bridge.cpp cpp/kernels.hip)
-    set_source_files_properties(cpp/kernels.hip PROPERTIES LANGUAGE HIP)
+    find_package(hipfft REQUIRED)
+    list(APPEND AVAP_SOURCES cpp/hip_bridge.cpp cpp/kernels.hip cpp/dcf.hip)
+    set_source_files_properties(cpp/kernels.hip cpp/dcf.hip PROPERTIES LANGUAGE HIP)
 endif()
 
 # NO_EXTRAS: pybind11's default LTO produces GCC slim-LTO objects that the
@@ -42,7 +43,7 @@ target_link_libraries(_core PRIVATE
 
 if(AVAP_WITH_HIP)
     target_compile_definitions(_core PRIVATE AVAP_WITH_HIP=1)
-    target_link_libraries(_core PRIVATE hip::host)
+    target_link_libraries(_core PRIVATE hip::host hip::hipfft)
 endif()
 
 install(TARGETS _core LIBRARY DESTINATION avap)

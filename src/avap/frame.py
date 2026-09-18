@@ -83,6 +83,7 @@ class ObjectMeta:
     bbox: tuple[float, float, float, float]  # x1, y1, x2, y2 full-frame
     track_id: int | None = None
     label: str = ""
+    tracked_by: str = "detector"   # "dcf" when a visual tracker bridged a detector miss
 
 
 @dataclass
