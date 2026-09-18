@@ -197,6 +197,11 @@ void device_memset(uintptr_t ptr, size_t n_bytes, int value) {
     check(hipMemset(reinterpret_cast<void*>(ptr), value, n_bytes), "hipMemset");
 }
 
+void device_upload(uintptr_t ptr, const void* host, size_t n_bytes) {
+    check(hipMemcpy(reinterpret_cast<void*>(ptr), host, n_bytes, hipMemcpyHostToDevice),
+          "hipMemcpy H2D (upload)");
+}
+
 void device_to_host(uintptr_t ptr, size_t n_bytes, void* out_host) {
     check(hipMemcpy(out_host, reinterpret_cast<void*>(ptr), n_bytes, hipMemcpyDeviceToHost),
           "hipMemcpy D2H (canvas)");

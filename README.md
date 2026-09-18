@@ -59,6 +59,11 @@ scripts/           setup_system.sh (sudo), verify_env.sh
       `avap.canvas` (fused NV12→RGB→letterbox batch tensor on the GPU),
       `avap.muxed_pipeline` + `examples/multi_stream_mux.py` — 4 streams,
       batched YOLO, 138 fps on the R9700 (docs/nvstreammux_reverse_engineering.md)
+- [x] NvDCF-class visual tracker: `avap.nvdcf` — per-target discriminative
+      correlation filters (gray + colour-name + gradient channels) on HIP/hipFFT,
+      NvDCF's association (visual x IoU x size) and shadow tracking, DeepStream
+      yml-compatible config; reads pixels straight from the mux canvas
+      (docs/nvdcf_tracker.md)
 - [ ] Multi-stream hot add/remove under load; fd-leak soak test
 - [ ] Zero-copy inference input (ORT IOBinding / DLPack), HIP-stream overlap
 - [ ] Per-GFX-gen tuning; detile kernel if linear export profiles badly

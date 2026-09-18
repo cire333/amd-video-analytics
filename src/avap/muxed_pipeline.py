@@ -22,6 +22,7 @@ import numpy as np
 from .canvas import BatchCanvas, CanvasTransform
 from .capabilities import probe_devices, require_decode_device
 from .frame import ColorMatrix, ColorRange, CropRect, FrameMeta, ObjectMeta, PlaneLayout, RawFrame
+from .nvdcf import VisualFrame
 from .roi import RoiConfig
 from .streammux import MuxBatch, MuxConfig, MuxEvent, MuxFrameMeta, StreamMux, StreamMuxRunner
 from .tracker import TrackerBank
@@ -180,7 +181,15 @@ class MuxedPipeline:
                 dets.append(ObjectMeta(class_id=cid, confidence=float(s), bbox=bbox,
                                        label=self.labels[cid] if cid < len(self.labels) else str(cid)))
             src = self._pad_to_source[meta.pad_index]
-            objects = self.tracker_bank.update(src, dets) if self.tracker_bank else dets
+            if self.tracker_bank:
+                # visual trackers (NvDCF) read pixels straight from the canvas slot
+                sx, sy = tf.dst_w / tf.src_w, tf.dst_h / tf.src_h
+                vframe = VisualFrame(self.canvas.slot_ptr(slot), self.canvas.width,
+                                     self.canvas.height, sx, sy,
+                                     tf.dst_x - tf.src_x * sx, tf.dst_y - tf.src_y * sy)
+                objects = self.tracker_bank.update(src, dets, vframe)
+            else:
+                objects = dets
             fm = MuxedFrameMeta(source_id=src, pts=meta.buf_pts // 1000,
                                 frame_width=tf.frame_width, frame_height=tf.frame_height,
                                 objects=objects, mux=meta, batch_index=batch.batch_index,
