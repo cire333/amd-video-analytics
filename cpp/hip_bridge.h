@@ -78,6 +78,17 @@ void rgb_crop_resize_device(uintptr_t src, int src_w, int src_h,
 void device_rgb_to_host(uintptr_t src, size_t n_floats, float* out_host);
 void free_device_buffer(uintptr_t ptr);
 
+// Encode-side conversion: device CHW float RGB -> host NV12 (Y then
+// interleaved UV, pitch = width) for the VCN encoder upload path.
+void device_rgb_to_nv12_host(uintptr_t src, int w, int h,
+                             bool full_range, bool bt709,
+                             uint8_t* out_host, int device_ordinal);
+
+void launch_rgb_to_nv12(const float* rgb, int w, int h,
+                        uint8_t* y_out, int y_pitch,
+                        uint8_t* uv_out, int uv_pitch,
+                        bool full_range, bool bt709, void* stream);
+
 // Kernel launcher (defined in kernels.hip).
 void launch_rgb_crop_resize(const float* src, int src_w, int src_h,
                             int cx, int cy, int cw, int ch,

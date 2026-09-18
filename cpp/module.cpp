@@ -5,6 +5,7 @@
 #include <pybind11/stl.h>
 
 #include "vaapi_decoder.h"
+#include "vcn_encoder.h"
 #ifdef AVAP_WITH_HIP
 #include "dcf.h"
 #include "hip_bridge.h"
@@ -272,6 +273,39 @@ PYBIND11_MODULE(_core, m) {
 
     m.def("free_device_buffer",
           [](uintptr_t ptr) { free_device_buffer(ptr); });
+#endif
+
+    py::class_<VcnEncoder>(m, "VcnEncoder")
+        .def(py::init<const std::string&, const std::string&, int, int,
+                      double, int64_t, const std::string&>(),
+             py::arg("output"), py::arg("codec"), py::arg("width"),
+             py::arg("height"), py::arg("fps"), py::arg("bitrate"),
+             py::arg("render_node"))
+        .def("write_nv12",
+             [](VcnEncoder& self, py::bytes data) {
+                 auto v = data.cast<std::string_view>();
+                 py::gil_scoped_release release;
+                 self.write_nv12(reinterpret_cast<const uint8_t*>(v.data()),
+                                 v.size());
+             })
+        .def("close", [](VcnEncoder& self) {
+            py::gil_scoped_release release;
+            self.close();
+        });
+
+#ifdef AVAP_WITH_HIP
+    m.def("device_rgb_to_nv12_host",
+          [](uintptr_t src, int w, int h, bool full_range, bool bt709,
+             int device_ordinal) -> py::bytes {
+              std::string out(static_cast<size_t>(w) * h * 3 / 2, '\0');
+              {
+                  py::gil_scoped_release release;
+                  device_rgb_to_nv12_host(
+                      src, w, h, full_range, bt709,
+                      reinterpret_cast<uint8_t*>(out.data()), device_ordinal);
+              }
+              return py::bytes(out);
+          });
 #endif
 
     // --- NvDCF-class correlation-filter engine -------------------------------

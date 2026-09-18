@@ -300,4 +300,22 @@ void nv12_host_to_canvas(const ConvertRequest& req, const CanvasPlacement& place
     hipFree(d_nv12);
 }
 
+void device_rgb_to_nv12_host(uintptr_t src, int w, int h,
+                             bool full_range, bool bt709,
+                             uint8_t* out_host, int device_ordinal) {
+    check(hipSetDevice(device_ordinal), "hipSetDevice");
+    const size_t y_size = static_cast<size_t>(w) * h;
+    const size_t nv12_size = y_size * 3 / 2;
+    uint8_t* d_nv12 = nullptr;
+    check(hipMalloc(&d_nv12, nv12_size), "hipMalloc(nv12)");
+    launch_rgb_to_nv12(reinterpret_cast<const float*>(src), w, h,
+                       d_nv12, w, d_nv12 + y_size, w,
+                       full_range, bt709, /*stream=*/nullptr);
+    hipError_t err = hipGetLastError();
+    if (err == hipSuccess)
+        err = hipMemcpy(out_host, d_nv12, nv12_size, hipMemcpyDeviceToHost);
+    hipFree(d_nv12);
+    check(err, "rgb_to_nv12");
+}
+
 }  // namespace avap

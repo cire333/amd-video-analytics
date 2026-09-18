@@ -208,4 +208,64 @@ void launch_nv12_to_rgb(const uint8_t* y_plane, const uint8_t* uv_plane,
                        out, dst_w, dst_h, full_range, bt709);
 }
 
+namespace {
+
+// Inverse of nv12_to_rgb: CHW float RGB [0,1] -> NV12 (Y plane + interleaved
+// UV at half resolution). One thread per 2x2 block: writes 4 Y and 1 UV pair;
+// chroma from the 2x2 RGB average (center siting, matching common encoders).
+__global__ void rgb_to_nv12_kernel(const float* __restrict__ rgb,
+                                   int w, int h,
+                                   uint8_t* __restrict__ y_out, int y_pitch,
+                                   uint8_t* __restrict__ uv_out, int uv_pitch,
+                                   bool full_range, bool bt709) {
+    const int bx = blockIdx.x * blockDim.x + threadIdx.x;  // 2x2 block coords
+    const int by = blockIdx.y * blockDim.y + threadIdx.y;
+    if (2 * bx >= w || 2 * by >= h) return;
+
+    const int plane = w * h;
+    const float kr = bt709 ? 0.2126f : 0.2990f;
+    const float kg = bt709 ? 0.7152f : 0.5870f;
+    const float kb = bt709 ? 0.0722f : 0.1140f;
+
+    float r_sum = 0, g_sum = 0, b_sum = 0;
+    for (int dy = 0; dy < 2; ++dy) {
+        for (int dx = 0; dx < 2; ++dx) {
+            const int x = min(2 * bx + dx, w - 1);
+            const int y = min(2 * by + dy, h - 1);
+            const int i = y * w + x;
+            const float r = rgb[i], g = rgb[plane + i], b = rgb[2 * plane + i];
+            const float lum = kr * r + kg * g + kb * b;
+            const float yv = full_range ? 255.0f * lum : 16.0f + 219.0f * lum;
+            if (2 * bx + dx < w && 2 * by + dy < h)
+                y_out[y * y_pitch + x] = static_cast<uint8_t>(
+                    fminf(fmaxf(yv + 0.5f, 0.0f), 255.0f));
+            r_sum += r; g_sum += g; b_sum += b;
+        }
+    }
+    const float r = r_sum * 0.25f, g = g_sum * 0.25f, b = b_sum * 0.25f;
+    const float lum = kr * r + kg * g + kb * b;
+    const float u = (b - lum) / (2.0f * (1.0f - kb));
+    const float v = (r - lum) / (2.0f * (1.0f - kr));
+    const float scale = full_range ? 255.0f : 224.0f;
+    uv_out[by * uv_pitch + 2 * bx] = static_cast<uint8_t>(
+        fminf(fmaxf(128.0f + scale * u + 0.5f, 0.0f), 255.0f));
+    uv_out[by * uv_pitch + 2 * bx + 1] = static_cast<uint8_t>(
+        fminf(fmaxf(128.0f + scale * v + 0.5f, 0.0f), 255.0f));
+}
+
+}  // namespace
+
+void launch_rgb_to_nv12(const float* rgb, int w, int h,
+                        uint8_t* y_out, int y_pitch,
+                        uint8_t* uv_out, int uv_pitch,
+                        bool full_range, bool bt709, void* stream) {
+    const dim3 block(16, 16);
+    const dim3 grid(((w + 1) / 2 + block.x - 1) / block.x,
+                    ((h + 1) / 2 + block.y - 1) / block.y);
+    hipLaunchKernelGGL(rgb_to_nv12_kernel, grid, block, 0,
+                       static_cast<hipStream_t>(stream),
+                       rgb, w, h, y_out, y_pitch, uv_out, uv_pitch,
+                       full_range, bt709);
+}
+
 }  // namespace avap

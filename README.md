@@ -148,3 +148,18 @@ object metadata, named probe points, the LPR cascade (plate detect -> OCR
 -> DINOv2 re-ID with plate voting and persistent vehicle re-identification),
 wire-compatible DataRecord publishing with per-source batching, and
 per-source FPS metrics. See [docs/advanced_api.md](docs/advanced_api.md).
+
+## VCN hardware video encode (NVENC analog)
+
+`VideoEncoder` encodes h264/hevc/av1 on the VCN through VAAPI, muxing to
+mp4/mkv or pushing to rtsp://. Measured at 1080p on the R9700: 342 fps
+(host frames) / 176 fps (device frames) vs 49 fps for the old cv2 mp4v
+path — with zero CPU load (libx264 hits 151 fps but saturates all cores).
+`write_device()` takes an advanced-API DeviceFrame (RGB->NV12 on-GPU).
+Reproduce with `scripts/bench_encode.py`.
+
+```python
+from avap import VideoEncoder
+with VideoEncoder("annotated.mp4", 1920, 1080, fps=25) as enc:
+    enc.write_bgr(frame)     # cv2-style frames
+```
