@@ -167,23 +167,15 @@ def _process_video(job: tuple[str, str, str]) -> dict:
                     cv2.putText(bgr, tag, (x1, max(12, y1 - 5)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, c, 1)
                 if writer is None:
-                    writer = cv2.VideoWriter(
-                        str(vdir / "annotated_raw.mp4"),
-                        cv2.VideoWriter_fourcc(*"mp4v"), fps,
-                        (bgr.shape[1], bgr.shape[0]))
-                writer.write(bgr)
+                    from avap.annotate import AnnotatedVideo
+                    writer = AnnotatedVideo(str(vdir / "annotated.mp4"),
+                                            fps=fps, is_bgr=True)
+                writer.write(bgr)  # boxes drawn above; VCN hardware encode
                 n += 1
     finally:
         if writer is not None:
-            writer.release()
+            writer.close()
         dec.close()
-
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
-                    "-i", str(vdir / "annotated_raw.mp4"),
-                    "-c:v", "libx264", "-preset", "veryfast",
-                    "-pix_fmt", "yuv420p", str(vdir / "annotated.mp4")],
-                   check=True)
-    os.remove(vdir / "annotated_raw.mp4")
 
     dt = time.time() - t0
     print(f"[{camera}/{stem}] {n} frames in {dt:.0f}s ({n / dt:.1f} fps)",

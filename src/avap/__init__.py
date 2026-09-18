@@ -9,6 +9,7 @@ from .frame import (BatchMeta, ColorMatrix, ColorRange, CropRect, FrameMeta,
                     ObjectMeta, PlaneLayout, RawFrame)
 from .bytetrack import ByteTracker
 from .chain import ModelChain
+from .annotate import AnnotatedVideo, draw_objects
 from .encode import VideoEncoder
 from .events import RetryPolicy, StreamEvent
 from .graph import GraphExecutor, ModelGraph, OnnxModel
@@ -24,11 +25,11 @@ from .tracker import IouTracker, TrackerBank
 __version__ = "0.1.0"
 
 __all__ = [
-    "AMDGPUManager", "AMDStream", "ByteTracker",
+    "AMDGPUManager", "AMDStream", "AnnotatedVideo", "ByteTracker",
     "BatchMeta", "ColorMatrix", "ColorRange", "CropRect", "DeviceCapabilities",
     "DynamicBatcher", "FrameMeta", "GraphExecutor", "IouTracker", "ModelChain", "ModelGraph",
     "ObjectMeta", "OcSortTracker", "OnnxModel", "Pipeline", "PlaneLayout", "RawFrame",
     "MuxBatch", "MuxConfig", "MuxEvent", "MuxFrameMeta", "RetryPolicy", "RoiConfig",
     "RoiTransform", "SortTracker", "SourceConfig", "StreamEvent", "StreamMux",
-    "StreamMuxRunner", "StreamRegistry", "TrackerBank", "VideoEncoder", "probe_devices",
+    "StreamMuxRunner", "StreamRegistry", "TrackerBank", "VideoEncoder", "draw_objects", "probe_devices",
 ]

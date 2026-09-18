@@ -158,3 +158,11 @@ from avap import VideoEncoder
 with VideoEncoder("annotated.mp4", 1920, 1080, fps=25) as enc:
     enc.write_bgr(frame)     # cv2-style frames
 ```
+
+### Annotated output everywhere
+
+`avap.annotate.AnnotatedVideo` draws tracked boxes and hardware-encodes;
+the batch scripts now use it (no more cv2-mp4v + x264 re-encode), and the
+light API grows `AMDStream(annotated_output="out.mp4" | "rtsp://...")` —
+detections to the data sink and an annotated video/restream from the same
+pass, VCN-encoded at ~zero CPU.
