@@ -78,7 +78,13 @@ class AdvancedPipeline:
                  publisher: DataPublisher | None = None,
                  include_embedding: bool = False,
                  device_ordinal: int | None = None,
-                 device_resident: bool = True):
+                 device_resident: bool = True,
+                 decode_backend: str = "auto"):
+        # decode_backend: "rocdecode" (zero-copy, decoded frames never touch
+        # host memory), "vaapi" (dmabuf/host-detile bridge), or "auto"
+        # (rocdecode when the extension was built with it).
+        if decode_backend not in ("auto", "rocdecode", "vaapi"):
+            raise ValueError("decode_backend must be auto | rocdecode | vaapi")
         self.primary = primary
         self.stages = list(stages or [])
         names = [self._stage_name(s) for s in self.stages]
@@ -91,6 +97,7 @@ class AdvancedPipeline:
         self.publisher = publisher
         self.include_embedding = include_embedding
         self.device_resident = device_resident
+        self.decode_backend = decode_backend
         self.perf = PerfData()
 
         self._probes: dict[str, list[Probe]] = {}
@@ -168,6 +175,14 @@ class AdvancedPipeline:
                 log.warning("device-resident crop API not in this _core build; "
                             "falling back to host crops")
                 self.device_resident = False
+        if self.decode_backend in ("auto", "rocdecode"):
+            from .. import _core
+            has = getattr(_core, "has_rocdecode", False)
+            if self.decode_backend == "rocdecode" and not has:
+                raise RuntimeError("decode_backend='rocdecode' but _core was "
+                                   "built without rocDecode")
+            self.decode_backend = "rocdecode" if has else "vaapi"
+        log.info("decode backend: %s", self.decode_backend)
         for stage in [self.primary, *self.stages]:
             stage.device_ordinal = self._device_ordinal
             stage.device_resident = self.device_resident
@@ -205,6 +220,43 @@ class AdvancedPipeline:
         t.start()
 
     def _source_worker(self, index: int) -> None:
+        if self.decode_backend == "rocdecode":
+            self._source_worker_rocdecode(index)
+        else:
+            self._source_worker_vaapi(index)
+
+    def _source_worker_rocdecode(self, index: int) -> None:
+        """Zero-copy path: decoded frames arrive as device RGB handles."""
+        from .. import _core
+        from .device import DeviceFrame
+        ctx = self._sources[index]
+        try:
+            dec = _core.RocDecoder(ctx.uri, self._device_ordinal)
+        except Exception:
+            log.exception("[%s] failed to open source; other sources continue",
+                          ctx.camera_id)
+            return
+        try:
+            while not self._stop.is_set() and index in self._sources:
+                with self._infer_lock:
+                    r = dec.next_frame_device_rgb()
+                if r is None:
+                    log.info("[%s] EOS", ctx.camera_id)
+                    return
+                handle, w, h, pts_us = r
+                dev = DeviceFrame(handle, w, h, self._device_ordinal)
+                try:
+                    rgb = dev.to_host()   # probes/annotation only
+                    self.process_image(index, rgb, pts_us, dev=dev)
+                finally:
+                    dev.close()
+        except Exception:
+            log.exception("[%s] source failed; other sources continue",
+                          ctx.camera_id)
+        finally:
+            dec.close()
+
+    def _source_worker_vaapi(self, index: int) -> None:
         from .. import _core
         ctx = self._sources[index]
         try:

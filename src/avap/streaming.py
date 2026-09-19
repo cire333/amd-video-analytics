@@ -126,13 +126,17 @@ class AMDStream:
                  retry_policy: RetryPolicy | None = None,
                  on_event: EventCallback | None = None,
                  annotated_output: str | None = None,
-                 annotated_fps: float = 25.0):
+                 annotated_fps: float = 25.0,
+                 decode_backend: str = "auto"):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         if frame_sample_rate is not None and frame_sample_rate <= 0:
             raise ValueError("frame_sample_rate must be > 0 fps")
         if model_quant not in QUANT_MODES:
             raise ValueError(f"model_quant must be one of {QUANT_MODES}")
+        if decode_backend not in ("auto", "rocdecode", "vaapi"):
+            raise ValueError("decode_backend must be auto | rocdecode | vaapi")
+        self.decode_backend = decode_backend
         self.source_id = source_id or os.path.basename(data_location) or "stream"
         self.data_location = data_location
         self.roi = _make_roi(region_of_interest)
@@ -178,6 +182,7 @@ class AMDStream:
                     raise RuntimeError("no AMD device with a decode engine found")
                 self.device = amd[0]
             self._uri = resolve_data_location(self.data_location)
+            self._resolve_decode_backend()
             if isinstance(self.model_name, (list, tuple)):
                 # daisy-chained models: frame handoff stays on the GPU
                 from .chain import ModelChain
@@ -297,7 +302,102 @@ class AMDStream:
                 return
             self.restarts += 1
 
+    def _resolve_decode_backend(self) -> None:
+        """auto: rocDecode for file sources when built in (zero-copy, 2.6x
+        faster); VAAPI for live sources (its network I/O is deadline-bounded
+        and abortable — the vendored rocDecode demuxer's is not, yet)."""
+        from . import _core
+        has = getattr(_core, "has_rocdecode", False)
+        is_live = self._uri.startswith(("rtsp://", "http://", "https://"))
+        if self.decode_backend == "rocdecode":
+            if not has:
+                raise RuntimeError("decode_backend='rocdecode' but _core was "
+                                   "built without rocDecode")
+            if is_live:
+                log.warning("[%s] rocdecode on a live source: no network "
+                            "deadlines/abort — a dead camera can block reads",
+                            self.source_id)
+        elif self.decode_backend == "auto":
+            self.decode_backend = "rocdecode" if (has and not is_live) else "vaapi"
+        log.info("[%s] decode backend: %s", self.source_id, self.decode_backend)
+
     def _process_source(self) -> None:
+        if self.decode_backend == "rocdecode":
+            self._process_source_rocdecode()
+        else:
+            self._process_source_vaapi()
+
+    def _process_source_rocdecode(self) -> None:
+        """Zero-copy loop: device RGB handles from rocDecode; the model
+        tensor is cut with the GPU crop/resize kernel (ROI-fused) and only
+        the model-input tensor (and, when annotating, one full frame) is
+        copied to host."""
+        from . import _core
+        dec = _core.RocDecoder(self._uri, self.device.device_ordinal)
+        self._emit_event("connected")
+        imgsz = self.imgsz
+        scratch = _core.device_alloc(3 * imgsz * imgsz * 4,
+                                     self.device.device_ordinal)
+        sample_period_us = (None if self.frame_sample_rate is None
+                            else 1_000_000 / self.frame_sample_rate)
+        next_sample_us = -1.0
+        batch, meta = [], []
+        try:
+            while not self._stop.is_set():
+                r = dec.next_frame_device_rgb()
+                if r is None:
+                    break
+                handle, fw, fh, pts_us = r
+                try:
+                    if sample_period_us is not None:
+                        if pts_us < next_sample_us:
+                            continue
+                        next_sample_us = max(next_sample_us + sample_period_us,
+                                             pts_us + 1)
+                    if self.roi is not None:
+                        rx, ry, rw, rh = self.roi.crop_rect_px(fw, fh)
+                    else:
+                        rx = ry = 0
+                        rw, rh = fw, fh
+                    _core.rgb_crop_resize_device(handle, fw, fh,
+                                                 (rx, ry, rw, rh), scratch,
+                                                 imgsz, imgsz,
+                                                 self.device.device_ordinal)
+                    tensor = _core.device_to_host_f32(scratch,
+                                                      [3, imgsz, imgsz])
+                    if self.roi is not None:
+                        import cv2
+                        mask = cv2.resize(self.roi.mask(fw, fh),
+                                          (imgsz, imgsz),
+                                          interpolation=cv2.INTER_NEAREST)
+                        tensor = tensor * mask[None]
+                    full = None
+                    if self._annotated is not None:
+                        chw = _core.device_rgb_to_host(handle, fw, fh)
+                        full = (np.clip(chw, 0.0, 1.0) * 255).astype(
+                            np.uint8).transpose(1, 2, 0)
+                finally:
+                    _core.free_device_buffer(handle)
+
+                if self._model.quant == "int8" and not self._model.ready:
+                    self._model.calibrate(tensor[None])
+                    continue
+                batch.append(np.ascontiguousarray(tensor))
+                meta.append((self.frames_processed, pts_us,
+                             (rx, ry, rw / imgsz, rh / imgsz), full))
+                self.frames_processed += 1
+                if len(batch) >= self.batch_size:
+                    self._infer_and_emit(batch, meta)
+                    batch, meta = [], []
+            if batch:
+                pad = self.batch_size - len(batch)
+                self._infer_and_emit(batch + [np.zeros_like(batch[0])] * pad,
+                                     meta)
+        finally:
+            _core.device_free(scratch)
+            dec.close()
+
+    def _process_source_vaapi(self) -> None:
         from . import _core
         dec = self._decoder_factory()
         self._active_decoder = dec

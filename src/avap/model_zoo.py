@@ -21,6 +21,56 @@ INT8_CALIBRATION_FRAMES = 32
 
 _CACHE = Path(os.environ.get("AVAP_MODEL_CACHE",
                              Path.home() / ".cache" / "avap" / "models"))
+_MXR_CACHE = Path(os.environ.get("AVAP_MXR_CACHE",
+                                 Path.home() / ".cache" / "avap" / "mxr"))
+
+
+def _cache_key(onnx_path: str, quant: str, offload_copy: bool) -> str:
+    """Cache identity for a compiled program: the exact model file, the
+    quantization, the parameter convention, the GPU ISA, and the ROCm
+    install (compiled code is arch- and version-specific)."""
+    import hashlib
+    from .capabilities import probe_devices
+    st = os.stat(onnx_path)
+    archs = ",".join(sorted({d.gcn_arch for d in probe_devices()})) or "unknown"
+    rocm = os.path.realpath("/opt/rocm")
+    raw = "|".join([os.path.abspath(onnx_path), str(st.st_size),
+                    str(int(st.st_mtime)), quant, str(offload_copy),
+                    archs, rocm])
+    return hashlib.sha1(raw.encode()).hexdigest()
+
+
+def compile_or_load(onnx_path: str, quant: str, offload_copy: bool = True):
+    """Compile an ONNX with MIGraphX, or load the cached compiled program
+    (.mxr) — turning ~2 min of startup into a sub-second load. The cache is
+    best-effort: any load/save problem falls back to a fresh compile.
+    Disable with AVAP_NO_MXR_CACHE=1. int8 is never cached (its compilation
+    depends on stream-collected calibration data)."""
+    import migraphx
+    use_cache = (quant != "int8"
+                 and os.environ.get("AVAP_NO_MXR_CACHE") != "1")
+    mxr = None
+    if use_cache:
+        mxr = _MXR_CACHE / f"{_cache_key(onnx_path, quant, offload_copy)}.mxr"
+        if mxr.exists():
+            try:
+                return migraphx.load(str(mxr)), True
+            except Exception:
+                pass  # stale/corrupt cache: recompile below
+
+    prog = migraphx.parse_onnx(onnx_path)
+    if quant == "fp16":
+        migraphx.quantize_fp16(prog)
+    prog.compile(migraphx.get_target("gpu"), offload_copy=offload_copy)
+    if mxr is not None:
+        try:
+            _MXR_CACHE.mkdir(parents=True, exist_ok=True)
+            tmp = mxr.with_suffix(".tmp")   # atomic vs concurrent workers
+            migraphx.save(prog, str(tmp))
+            os.replace(tmp, mxr)
+        except Exception:
+            pass
+    return prog, False
 
 
 def resolve_model(model: str, batch_size: int = 1, imgsz: int = 640) -> str:
@@ -64,13 +114,22 @@ class MigraphxModel:
         self._mgx = migraphx
         self.quant = quant
         self.device_ordinal = device_ordinal
-        self._prog = migraphx.parse_onnx(onnx_path)
-        self.input_name = self._prog.get_parameter_names()[0]
-        self.input_shape = self._prog.get_parameter_shapes()[self.input_name].lens()
         self._calib: list[np.ndarray] = []
         self._compiled = False
         if quant != "int8":
-            self._compile()
+            self._prog, self.loaded_from_cache = compile_or_load(
+                onnx_path, quant, offload_copy=True)
+            self.input_name = self._prog.get_parameter_names()[0]
+            self.input_shape = self._prog.get_parameter_shapes()[
+                self.input_name].lens()
+            self._warmup()
+            self._compiled = True
+        else:
+            self.loaded_from_cache = False
+            self._prog = migraphx.parse_onnx(onnx_path)
+            self.input_name = self._prog.get_parameter_names()[0]
+            self.input_shape = self._prog.get_parameter_shapes()[
+                self.input_name].lens()
 
     @property
     def ready(self) -> bool:
@@ -87,20 +146,21 @@ class MigraphxModel:
         return self._compiled
 
     def _compile(self) -> None:
+        # int8 path only (fp32/fp16 go through compile_or_load in __init__)
         target = self._mgx.get_target("gpu")
-        if self.quant == "fp16":
-            self._mgx.quantize_fp16(self._prog)
-        elif self.quant == "int8":
-            data = [{self.input_name: self._mgx.argument(t)} for t in self._calib]
-            self._mgx.quantize_int8(self._prog, target, calibration=data)
-            self._calib.clear()
+        data = [{self.input_name: self._mgx.argument(t)} for t in self._calib]
+        self._mgx.quantize_int8(self._prog, target, calibration=data)
+        self._calib.clear()
         self._prog.compile(target)
+        self._warmup()
+        self._compiled = True
+
+    def _warmup(self) -> None:
         # first-run sanity: warm up and keep the input buffer alive through
         # run() — migraphx.argument borrows the numpy buffer (no copy)
         warm = np.ascontiguousarray(
             np.zeros(self.input_shape, dtype=np.float32))
         self._prog.run({self.input_name: self._mgx.argument(warm)})
-        self._compiled = True
 
     def __call__(self, batch: np.ndarray) -> np.ndarray:
         if not self._compiled:

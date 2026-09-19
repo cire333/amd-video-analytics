@@ -171,3 +171,13 @@ the batch scripts now use it (no more cv2-mp4v + x264 re-encode), and the
 light API grows `AMDStream(annotated_output="out.mp4" | "rtsp://...")` —
 detections to the data sink and an annotated video/restream from the same
 pass, VCN-encoded at ~zero CPU.
+
+## Zero-copy decode (rocDecode backend)
+
+Built automatically when rocDecode is installed (`sudo apt install
+rocdecode rocdecode-dev`). Decoded frames stay in GPU memory end to end —
+no tiled-surface host detile. Measured on the R9700: 471 fps vs 181 fps
+for the VAAPI bridge at 1080p, pixel-identical output. The advanced
+pipeline selects it by default (`AdvancedPipeline(decode_backend="auto")`);
+`"vaapi"` remains available. Also: MIGraphX compiled-model caching cuts
+model startup from ~2 min to ~1 s (`~/.cache/avap/mxr`).
